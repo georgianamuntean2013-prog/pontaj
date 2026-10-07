@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16233A">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Pontaj</title>
+<style>
+:root{--bg:#EDF1F5;--card:#fff;--ink:#16233A;--mut:#5B6B82;--line:#D3DBE6;--go:#1F7A5C;--stop:#B23A48;--acc:#2C5AA0}
+@media(prefers-color-scheme:dark){:root{--bg:#0F1826;--card:#18253A;--ink:#E8EEF6;--mut:#93A3BA;--line:#2A3A54;--go:#3DAA84;--stop:#E0616F;--acc:#7FA6E6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 0 calc(72px + env(safe-area-inset-bottom))}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:1.1rem;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+input,select,button{font:inherit;color:inherit}
+input,select{width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin:4px 0 12px}
+label{font-size:.85rem;color:var(--mut)}
+button{border:0;border-radius:10px;padding:14px;font-weight:600;cursor:pointer;background:var(--acc);color:#fff}
+button.sec{background:transparent;color:var(--acc);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.clock{font-size:3.4rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1}
+.state{color:var(--mut);margin:6px 0 16px}
+.big{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.big button{padding:22px 8px;font-size:1.15rem}
+#bv{background:var(--go)}#bp{background:var(--stop)}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{padding:8px 4px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--mut);font-weight:500}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.wrap{overflow-x:auto}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;color:var(--mut);border-radius:0;padding:16px 2px;font-size:.85rem}
+nav button.on{color:var(--acc);box-shadow:inset 0 3px 0 var(--acc)}
+.err{color:var(--stop);min-height:1.4em;margin:0 0 8px}
+.ok{color:var(--go)}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.tag{font-size:.8rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+header#hd{background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;text-align:center}header#hd b{display:block}header#hd small{color:var(--mut)}
+.gr{min-width:640px}.gr-r{display:flex;align-items:center;border-bottom:1px solid var(--line)}.gr-n{width:112px;flex:none;font-size:.85rem;padding:6px 4px}.gr-t{position:relative;flex:1;height:34px;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/13 - 1px),var(--line) calc(100%/13 - 1px),var(--line) calc(100%/13))}.gr-t.gr-h{height:auto;background:none;display:flex}.gr-h span{flex:1;font-size:.7rem;color:var(--mut)}.gr-b{position:absolute;top:4px;bottom:4px;border-radius:4px;background:var(--acc);color:#fff;font-size:.7rem;overflow:hidden;white-space:nowrap;padding:0 4px;line-height:26px}.gr-b.abs{background:var(--stop)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header id="hd" hidden></header>
+<main id="app"></main>
+<nav id="nav" hidden></nav>
+<script>
+const $=s=>document.querySelector(s), app=$('#app'), nav=$('#nav');
+let S=JSON.parse(localStorage.getItem('pontaj')||'null'), tab='azi', today=null, tick;
+const soldHtml=s=>`<div class="row" style="justify-content:flex-start;gap:28px"><div><div class="clock" style="font-size:2.2rem">${s[2025].ramase}</div><small class="state">zile CO 2025</small></div><div><div class="clock" style="font-size:2.2rem">${s[2026].ramase}</div><small class="state">zile CO 2026</small></div></div>${s.in_asteptare?`<small class="state">${s.in_asteptare} zile așteaptă aprobarea</small>`:''}`;
+const perioada=c=>c.ora_de_la?`${c.de_la} ${c.ora_de_la}–${c.ora_pana_la}`:`${c.de_la} → ${c.pana_la}`;
+const pad=n=>String(n).padStart(2,'0');
+const ym=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path,opt={}){
+  const r=await fetch('/api'+path,{...opt,headers:{'Content-Type':'application/json',...(S?{Authorization:'Bearer '+S.token}:{}),...opt.headers}}).catch(()=>{throw new Error('Nu mă pot conecta la server. Verifică dacă aplicația rulează și dacă ai internet.')});
+  if(r.status===401&&S){S=null;localStorage.removeItem('pontaj');render();throw new Error('Sesiune expirată.')}
+  if(!r.ok){const e=await r.json().catch(()=>({}));
+    if(r.status===403&&/informarea/.test(e.detail||'')&&S&&!S.gdpr){S.gdpr=1;localStorage.setItem('pontaj',JSON.stringify(S));render()}
+    throw new Error(e.detail||'Eroare '+r.status)}
+  return r.headers.get('content-type')?.includes('json')?r.json():r.blob();
+}
+const post=(p,b)=>api(p,{method:'POST',body:b?JSON.stringify(b):undefined});
+
+function antet(){const h=$('#hd');
+  if(S&&!S.firma){api('/eu').then(p=>{S={...S,...p};localStorage.setItem('pontaj',JSON.stringify(S));render()}).catch(()=>{})}
+  if(!S||!S.firma){h.hidden=true;return}
+  const f=S.firma;h.hidden=false;h.innerHTML=`<b>${esc(f.denumire)}</b><small>${[f.cui&&'CUI '+esc(f.cui),esc(f.adresa),esc(f.contact)].filter(Boolean).join(' · ')}</small>`}
+
+function render(){
+  clearInterval(tick);antet();
+  if(!S){nav.hidden=true;return loginView()}
+  if(S.schimba){nav.hidden=true;return parolaView()}
+  if(S.gdpr){nav.hidden=true;return gdprView()}
+  const tabs=[['azi','Azi'],['luna','Luna'],['conc','Concedii'],['cal','Calendar']];
+  if(S.admin)tabs.push(['ech','Echipă'],['adm','Admin']);
+  nav.hidden=false;
+  nav.innerHTML=tabs.map(([k,t])=>`<button class="${k===tab?'on':''}" data-t="${k}">${t}</button>`).join('');
+  nav.onclick=e=>{if(e.target.dataset.t){tab=e.target.dataset.t;render()}};
+  ({azi:aziView,luna:lunaView,conc:concView,cal:calView,ech:echView,adm:admView})[tab]();
+}
+
+function parolaView(){
+  app.innerHTML=`<h1>Alege o parolă nouă</h1><div class="card"><p class="state">Ai intrat cu parola primită. Alege acum o parolă personală, pe care o știi doar tu.</p><label>Parola primită</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['pv','pn'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="e"></p><button style="width:100%" id="pb">Salvează parola</button></div>`;
+  $('#pb').onclick=async()=>{try{await post('/parola',{veche:$('#pv').value,noua:$('#pn').value});S.schimba=0;localStorage.setItem('pontaj',JSON.stringify(S));render()}catch(x){$('#e').textContent=x.message}};
+}
+
+async function gdprView(){
+  app.innerHTML=`<h1>Datele tale personale</h1><div class="card"><div id="gt" style="white-space:pre-wrap;max-height:50vh;overflow:auto;margin-bottom:12px"></div><p><b>Am citit informarea de mai sus și am înțeles cum îmi sunt prelucrate datele.</b></p><p class="err" id="e"></p><div class="big"><button id="gd" style="background:var(--go)">Da</button><button id="gn" style="background:var(--stop)">Nu</button></div></div>`;
+  try{const g=await api('/gdpr');$('#gt').textContent=g.text;
+    const raspunde=async v=>{try{await post('/gdpr',{versiune:g.versiune,raspuns:v});
+      if(v){S.gdpr=0;localStorage.setItem('pontaj',JSON.stringify(S));render()}
+      else{S=null;localStorage.removeItem('pontaj');render();alert('Fără această confirmare nu poți folosi aplicația. Dacă ai întrebări, vorbește cu administratorul firmei.')}
+    }catch(x){$('#e').textContent=x.message}};
+    $('#gd').onclick=()=>raspunde(true);$('#gn').onclick=()=>raspunde(false);
+  }catch(x){$('#e').textContent=x.message}
+}
+
+function loginView(){
+  app.innerHTML=`<h1>Pontaj</h1><div class="card"><label>Utilizator</label><input id="u" autocomplete="username" autocapitalize="none">
+  <label>Parolă</label><input id="p" type="password" autocomplete="current-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['p'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="e"></p><button style="width:100%" id="go">Intră</button></div>`;
+  const go=async()=>{try{S=await post('/login',{username:$('#u').value.trim(),parola:$('#p').value});localStorage.setItem('pontaj',JSON.stringify(S));render()}catch(x){$('#e').textContent=x.message}};
+  $('#go').onclick=go;$('#p').onkeydown=e=>{if(e.key==='Enter')go()};
+}
+
+async function notificari(){
+  const el=$('#nt');if(!el)return;
+  if(!('serviceWorker'in navigator&&'PushManager'in window&&window.isSecureContext)){
+    el.innerHTML='<b>Notificări</b><p class="state">Merg doar când aplicația e pe HTTPS (după ce o punem în cloud). Pe iPhone, adaug-o întâi pe ecranul principal.</p>';return}
+  const reg=await navigator.serviceWorker.ready,sub=await reg.pushManager.getSubscription();
+  el.innerHTML=`<b>Notificări</b><p class="state">${sub?'Active pe acest dispozitiv. Primești reminder la 07:50 și 08:10 dacă nu ai pontat.':'Primești reminder la 07:50 și 08:10 dacă nu ai pontat venirea.'}</p><p class="err" id="en"></p><button class="${sub?'sec':''}" style="width:100%" id="nb">${sub?'Trimite o notificare de test':'Activează notificările'}</button>`;
+  $('#nb').onclick=async()=>{try{
+    if(sub){await post('/push/test');return}
+    if(await Notification.requestPermission()!=='granted')throw new Error('Notificările sunt blocate în browser.');
+    const k=(await api('/push/cheie')).cheie,key=Uint8Array.from(atob((k+'='.repeat((4-k.length%4)%4)).replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+    const s=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
+    await post('/push/abonare',s.toJSON());notificari();
+  }catch(x){$('#en').textContent=x.message}};
+}
+
+const locatie=()=>new Promise((ok,nu)=>{
+  if(!navigator.geolocation||!window.isSecureContext)return nu(new Error('locația nu e disponibilă pe acest dispozitiv (are nevoie de HTTPS).'));
+  navigator.geolocation.getCurrentPosition(p=>ok({lat:p.coords.latitude,lon:p.coords.longitude,prec:p.coords.accuracy}),
+    e=>nu(new Error(e.code===1?'locația e blocată în browser. Permite-o din setările site-ului.':'locația nu a putut fi citită.')),
+    {enableHighAccuracy:true,timeout:10000,maximumAge:0})});
+
+async function aziView(){
+  app.innerHTML=`<h1>Salut, ${esc(S.prenume||S.nume)}</h1><div class="card"><div class="clock" id="ck"></div><div class="state" id="st">Se încarcă…</div>
+  <p class="err" id="e"></p><div class="big"><button id="bv">Venire</button><button id="bp">Plecare</button></div></div>
+  <div class="card"><label>Pauză de masă (minute)</label><div class="row"><input id="pz" type="number" min="0" max="240" step="5" style="margin:0"><button class="sec" id="sp">Salvează</button></div></div><div class="card" id="co"></div><div class="card" id="nt"></div>`;
+  const now=new Date(), zi=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
+  const show=r=>{today=r;$('#pz').value=r?.pauza_min||0;
+    $('#st').textContent=!r?'Nu ai pontat venirea azi.':r.ora_plecare?`Ai plecat la ${r.ora_plecare} · ${r.total_ore} ore`:`La lucru din ${r.ora_venire}`};
+  const clock=()=>{const d=new Date();$('#ck').textContent=pad(d.getHours())+':'+pad(d.getMinutes())};
+  clock();tick=setInterval(clock,10000);
+  try{show((await api('/pontaje?luna='+ym(now))).find(r=>r.data===zi))}catch(x){$('#e').textContent=x.message}
+  api('/zile-co').then(s=>$('#co').innerHTML=soldHtml(s)).catch(()=>{});
+  api('/eu').then(p=>{if(p.locatie!==S.locatie){S.locatie=p.locatie;localStorage.setItem('pontaj',JSON.stringify(S))}}).catch(()=>{});
+  notificari();
+  const act=(p,b,m)=>async()=>{try{show(await (b?api(p,b):post(p)));$('#e').textContent='';}catch(x){$('#e').textContent=x.message}};
+  const cuLoc=p=>async()=>{try{let b=null,nota='';
+    if(S.locatie){try{b=await locatie()}catch(x){nota=x.message}}
+    show(await post(p,b));$('#e').textContent=nota?'Pontaj salvat, dar '+nota:'';
+  }catch(x){$('#e').textContent=x.message}};
+  $('#bv').onclick=cuLoc('/venire');$('#bp').onclick=cuLoc('/plecare');
+  $('#sp').onclick=()=>act('/pauza',{method:'PUT',body:JSON.stringify({minute:+$('#pz').value||0})})();
+}
+
+async function lunaView(){
+  const zi=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  app.innerHTML=`<h1>Pontajul meu</h1><div class="card"><input type="month" id="m" value="${ym(new Date())}"><div id="rz"></div><div class="wrap" id="t"></div></div>
+  <div class="card"><b>Am uitat să pontez</b><p class="state">Trimite ora corectă; o aprobă administratorul.</p><label>Ziua</label><input type="date" id="cd" value="${zi(new Date(Date.now()-864e5))}" max="${zi(new Date())}"><label>Ora venirii</label><input type="time" id="cv"><label>Ora plecării</label><input type="time" id="cp"><label>Motiv</label><input id="cm" placeholder="ex. am uitat să apăs Venire"><p class="err" id="ec"></p><button style="width:100%" id="cb">Trimite cererea</button><div id="cr" style="margin-top:12px"></div></div>`;
+  const sg=n=>(n>0?'+':'')+n, big=(v,t,c)=>`<div><div class="clock" style="font-size:1.8rem;${c?'color:var(--'+c+')':''}">${v}</div><small class="state">${t}</small></div>`;
+  const load=async()=>{const L=$('#m').value,[rows,z]=await Promise.all([api('/pontaje?luna='+L),api('/rezumat?luna='+L)]);
+    $('#rz').innerHTML=`<div class="row" style="justify-content:flex-start;gap:24px;margin-bottom:12px">${big(z.lucrate,'ore lucrate')}${big(z.norma,'normă')}${big(sg(z.diferenta),'diferență',z.diferenta<0?'stop':'go')}</div>`;
+    $('#t').innerHTML=rows.length?`<table><tr><th>Data</th><th>Venire</th><th>Plecare</th><th class="n">Ore</th><th class="n">±</th></tr>${rows.map(r=>`<tr><td>${r.data.slice(8)}.${r.data.slice(5,7)}${r.corectat?' ✎':''}</td><td>${r.ora_venire||''}</td><td>${r.ora_plecare||''}</td><td class="n">${r.total_ore??''}</td><td class="n">${r.diferenta==null?'':sg(r.diferenta)}</td></tr>`).join('')}</table><small class="state">✎ = pontaj corectat</small>`:'<p class="state">Niciun pontaj în luna asta.</p>'};
+  const cer=async()=>{const r=await api('/corectii');$('#cr').innerHTML=r.slice(0,8).map(c=>`<div class="row" style="padding:6px 0"><span>${c.data.slice(8)}.${c.data.slice(5,7)} · ${c.ora_venire||'—'} → ${c.ora_plecare||'—'}<br><small class="state">${esc(c.motiv)}</small></span><span>${c.status==='in asteptare'?`<button class="sec" data-x="${c.id}">Anulează</button> `:''}<span class="tag">${esc(c.status)}</span></span></div>`).join('')};
+  $('#cr').onclick=async e=>{if(e.target.dataset.x&&confirm('Anulezi cererea?')){await api('/corectii/'+e.target.dataset.x,{method:'DELETE'});cer()}};
+  $('#cb').onclick=async()=>{try{await post('/corectii',{data:$('#cd').value,ora_venire:$('#cv').value||null,ora_plecare:$('#cp').value||null,motiv:$('#cm').value});$('#ec').textContent='';$('#cv').value=$('#cp').value=$('#cm').value='';cer()}catch(x){$('#ec').textContent=x.message}};
+  $('#m').onchange=load;load();cer();
+}
+
+async function calView(){
+  const hm=m=>pad(Math.floor(m/60))+':'+pad(m%60),zi=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  app.innerHTML=`<h1>Calendar</h1>
+  <div class="card"><b>Cine ce face</b><select id="gr"></select>
+  <div class="row" style="margin-bottom:8px"><button class="sec" id="zp">◀</button><input type="date" id="zd" value="${zi(new Date())}" style="margin:0"><button class="sec" id="zn">▶</button></div>
+  <div class="wrap" id="gv"></div><p class="state" id="gi"></p></div>
+  <div class="card"><b>Documente și notă comună</b><p class="state">Le văd doar membrii grupului ales mai sus. Nu încărca acte de identitate sau documente medicale.</p>
+  <label>Notă comună</label><textarea id="nt1" rows="6" style="width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:inherit;color:inherit"></textarea><small class="state" id="ni"></small><p class="err" id="en1"></p>
+  <div class="row"><button class="sec" id="ns" style="flex:1">Salvează nota</button><button class="sec" id="nr">Reîncarcă</button></div>
+  <div id="fi" style="margin-top:16px"></div>
+  <label>Adaugă un fișier (maxim 10 MB)</label><input type="file" id="ff"><input id="fd1" placeholder="Descriere (opțional)"><p class="err" id="ef1"></p><button style="width:100%" id="fu">Încarcă</button></div>
+  <div class="card"><b>Caută o oră liberă pentru toți</b><label>Cât să dureze</label><select id="dm"><option value="30">30 de minute</option><option value="60" selected>1 oră</option><option value="90">1 oră și jumătate</option><option value="120">2 ore</option></select><button style="width:100%" id="fl">Caută în următoarele 5 zile lucrătoare</button><div id="lib" style="margin-top:12px"></div></div>
+  <div class="card"><b>Calendarele mele</b><div id="cc"></div></div>
+  <div class="card"><b>Conectează un calendar</b><label>Nume (ex. Serviciu)</label><input id="cn1"><label>Linkul ICS al calendarului</label><input id="cu" type="url" autocapitalize="none"><label>Ce văd colegii din el</label><select id="cv1"><option value="ocupat">doar „ocupat"</option><option value="detalii">ocupat + titlul evenimentului</option><option value="ascuns">nimic (nu îl arăta)</option></select><p class="err" id="ce"></p><button style="width:100%" id="cb1">Conectează</button>
+  <details style="margin-top:12px"><summary>Cum obțin linkul?</summary><p class="state"><b>Google Calendar</b> (pe calculator): Setări, alege calendarul, „Integrează calendarul", copiază „Adresa secretă în format iCal".<br><b>Outlook / Microsoft 365</b>: Setări, Calendar, Calendare partajate, „Publică un calendar", alege calendarul și copiază linkul ICS (poate fi dezactivat de administratorul firmei).<br><b>iPhone / iCloud</b>: în Calendar, la calendarul dorit alegi „Calendar public" și copiezi linkul.<br>Meniurile mai pot diferi puțin. Oricine are linkul poate vedea calendarul, deci nu îl da mai departe.</p></details></div>`;
+  const H0=7,H1=20,pc=m=>Math.max(0,Math.min(100,(m/60-H0)/(H1-H0)*100));
+  const grila=d=>{const ore=[];for(let h=H0;h<H1;h++)ore.push(`<span>${h}</span>`);
+    const nume=m=>esc(m.nume)+' '+esc(m.prenume)+(m.stare==='fara_calendar'?'<br><small class="state">fără calendar</small>':m.stare==='nepartajat'?'<br><small class="state">nepartajat</small>':'');
+    const bara=b=>{const l=pc(b.de),w=pc(b.pana)-l;return w<=0?'':`<div class="gr-b ${b.tip==='absent'?'abs':''}" style="left:${l}%;width:${Math.max(w,.8)}%" title="${esc(hm(b.de)+'–'+hm(b.pana)+(b.titlu?' '+b.titlu:''))}">${esc(b.titlu||'')}</div>`};
+    return `<div class="gr"><div class="gr-r"><div class="gr-n"></div><div class="gr-t gr-h">${ore.join('')}</div></div>`+d.membri.map(m=>`<div class="gr-r"><div class="gr-n">${nume(m)}</div><div class="gr-t">${m.blocuri.map(bara).join('')}</div></div>`).join('')+`</div>`};
+  let gs=[];
+  const incarca=async()=>{
+    if(!gs.length){$('#gv').innerHTML='';$('#gi').textContent='Nu faci parte din niciun grup încă. Administratorul le creează din Admin.';return}
+    const d=await api(`/program?grup=${$('#gr').value}&data=${$('#zd').value}`);
+    $('#gv').innerHTML=grila(d);$('#gi').innerHTML='<span style="color:var(--acc)">■</span> ocupat &nbsp; <span style="color:var(--stop)">■</span> absent (concediu / învoire) &nbsp; gol = liber'};
+  const zile=n=>{const d=new Date($('#zd').value+'T12:00:00');d.setDate(d.getDate()+n);$('#zd').value=zi(d);incarca()};
+  $('#zp').onclick=()=>zile(-1);$('#zn').onclick=()=>zile(1);$('#zd').onchange=incarca;$('#gr').onchange=()=>{incarca();docs()};
+  $('#fl').onclick=async()=>{try{const r=await api(`/ore-libere?grup=${$('#gr').value}&data=${$('#zd').value}&zile=5&minute=${$('#dm').value}`);
+    $('#lib').innerHTML=(r.sloturi.length?r.sloturi.map(s=>`<div class="row" style="padding:6px 0"><span>${s.data.slice(8)}.${s.data.slice(5,7)}</span><span>${hm(s.de)}–${hm(s.pana)}</span></div>`).join(''):'<p class="state">Nu există o oră liberă pentru toți în intervalul ăsta.</p>')+(r.necunoscut.length?`<p class="state">Nu am date de la: ${r.necunoscut.map(esc).join(', ')}.</p>`:'')}catch(x){$('#lib').innerHTML=`<p class="err">${esc(x.message)}</p>`}};
+  const lab={ocupat:'doar ocupat',detalii:'cu titlu',ascuns:'nu îl arăta'};
+  const cal=async()=>{const r=await api('/calendare');
+    $('#cc').innerHTML=r.length?r.map(c=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><div class="row"><b>${esc(c.nume)}</b><small class="state">${esc(c.sursa||'')}</small></div><small class="${c.eroare?'err':'state'}">${c.eroare?esc(c.eroare):(c.ultima?'sincronizat '+new Date(c.ultima+'Z').toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+' · '+c.nr+' evenimente':'în așteptare')}</small><div class="row" style="margin-top:6px"><select data-v="${c.id}" style="margin:0">${Object.keys(lab).map(k=>`<option value="${k}" ${k===c.vizibil?'selected':''}>${lab[k]}</option>`).join('')}</select><span><button class="sec" data-s="${c.id}">Sincronizează</button> <button class="sec" data-x="${c.id}">Șterge</button></span></div></div>`).join(''):'<p class="state">Nu ai conectat niciun calendar.</p>'};
+  $('#cc').onclick=async e=>{const d=e.target.dataset;try{
+    if(d.s){e.target.textContent='…';await post(`/calendare/${d.s}/sync`)}
+    else if(d.x&&confirm('Ștergi calendarul din aplicație? Calendarul tău original nu se schimbă.')){await api('/calendare/'+d.x,{method:'DELETE'})}
+    else return;
+    cal();incarca()}catch(x){alert(x.message)}};
+  $('#cc').onchange=async e=>{if(e.target.dataset.v){const c=(await api('/calendare')).find(c=>c.id==e.target.dataset.v);
+    await api('/calendare/'+c.id,{method:'PUT',body:JSON.stringify({nume:c.nume,vizibil:e.target.value})});incarca()}};
+  $('#cb1').onclick=async()=>{try{$('#ce').textContent='Se încarcă calendarul…';await post('/calendare',{nume:$('#cn1').value,url:$('#cu').value,vizibil:$('#cv1').value});$('#cn1').value=$('#cu').value='';$('#ce').textContent='';cal();incarca()}catch(x){$('#ce').textContent=x.message}};
+  let nver=0;
+  const mb=b=>b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
+  const docs=async()=>{
+    if(!gs.length){$('#fi').innerHTML='';$('#nt1').value='';return}
+    const g=$('#gr').value,[n,f]=await Promise.all([api(`/grupuri/${g}/nota`),api(`/grupuri/${g}/fisiere`)]);
+    nver=n.ver;$('#nt1').value=n.text;$('#en1').textContent='';
+    $('#ni').textContent=n.de?`Ultima modificare: ${n.de}, ${new Date(n.la+'Z').toLocaleString('ro-RO')}`:'';
+    $('#fi').innerHTML=f.length?f.map(x=>`<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap"><span><b>${esc(x.nume)}</b><br><small class="state">${mb(x.marime)} · ${esc(x.autor)} · ${new Date(x.creat+'Z').toLocaleDateString('ro-RO')}${x.descriere?' · '+esc(x.descriere):''}</small></span><span><button class="sec" data-f="${x.id}" data-n="${esc(x.nume)}">Descarcă</button>${x.al_meu||S.admin?` <button class="sec" data-z="${x.id}">Șterge</button>`:''}</span></div>`).join(''):'<p class="state">Niciun fișier încă.</p>'};
+  $('#fi').onclick=async e=>{const d=e.target.dataset;try{
+    if(d.f){const b=await api('/fisiere/'+d.f);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=d.n;a.click()}
+    else if(d.z&&confirm('Ștergi fișierul pentru toți din grup?')){await api('/fisiere/'+d.z,{method:'DELETE'});docs()}
+  }catch(x){alert(x.message)}};
+  $('#ns').onclick=async()=>{try{const r=await api(`/grupuri/${$('#gr').value}/nota`,{method:'PUT',body:JSON.stringify({text:$('#nt1').value,ver:nver})});nver=r.ver;$('#en1').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#en1').textContent=x.message}};
+  $('#nr').onclick=docs;
+  $('#fu').onclick=async()=>{const f=$('#ff').files[0];
+    if(!f){$('#ef1').textContent='Alege un fișier.';return}
+    if(f.size>10*1024*1024){$('#ef1').textContent='Fișierul are peste 10 MB.';return}
+    if(!gs.length){$('#ef1').textContent='Nu ai un grup ales.';return}
+    try{$('#ef1').textContent='Se încarcă…';
+      const r=await fetch(`/api/grupuri/${$('#gr').value}/fisiere?nume=${encodeURIComponent(f.name)}&descriere=${encodeURIComponent($('#fd1').value)}`,{method:'POST',headers:{Authorization:'Bearer '+S.token,'Content-Type':'application/octet-stream'},body:f}).catch(()=>{throw new Error('Nu mă pot conecta la server.')});
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.detail||'Eroare '+r.status)}
+      $('#ff').value=$('#fd1').value='';$('#ef1').textContent='';docs()
+    }catch(x){$('#ef1').textContent=x.message}};
+  gs=await api('/grupuri');$('#gr').innerHTML=gs.map(g=>`<option value="${g.id}">${esc(g.nume)}</option>`).join('');
+  cal();incarca();docs();
+}
+
+async function concView(){
+  app.innerHTML=`<h1>Concedii</h1><div class="card" id="co"></div><div class="card"><label>De la</label><input type="date" id="a"><label>Până la</label><input type="date" id="b">
+  <label>Tip</label><select id="tp"><option value="concediu">concediu de odihnă</option><option value="medical">concediu medical</option><option value="invoire">învoire</option><option value="zi_libera">zi liberă plătită</option><option value="altele">altele</option></select><label>Doar pentru câteva ore (medical sau învoire, într-o singură zi)</label><div class="row"><input type="time" id="oa" style="margin:4px 0 12px"><input type="time" id="ob" style="margin:4px 0 12px"></div><p class="err" id="e"></p><button style="width:100%" id="s">Trimite cererea</button></div><div class="card" id="l"></div>`;
+  const load=async()=>{api('/zile-co').then(s=>$('#co').innerHTML=soldHtml(s));const r=await api('/concedii');$('#l').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:6px 0"><span>${perioada(c)}<br><small class="state">${esc(c.tip)}</small></span><span>${c.status==='in asteptare'?`<button class="sec" data-x="${c.id}">Anulează</button> `:''}<span class="tag">${esc(c.status)}</span></span></div>`).join(''):'<p class="state">Nu ai cereri.</p>'};
+  $('#s').onclick=async()=>{try{await post('/concedii',{de_la:$('#a').value,pana_la:$('#oa').value?$('#a').value:$('#b').value,tip:$('#tp').value,ora_de_la:$('#oa').value||null,ora_pana_la:$('#ob').value||null});$('#e').textContent='';load()}catch(x){$('#e').textContent=x.message}};
+  $('#l').onclick=async e=>{if(e.target.dataset.x&&confirm('Anulezi cererea?')){await api('/concedii/'+e.target.dataset.x,{method:'DELETE'});load()}};
+  load();
+}
+
+async function echView(){
+  app.innerHTML=`<h1>Echipă</h1><div class="card" id="lst"></div>
+  <div class="card"><input type="month" id="m" value="${ym(new Date())}"><button class="sec" id="x" style="width:100%">Descarcă CSV</button><div class="wrap" id="rzz" style="margin-top:12px"></div><div class="wrap" id="t" style="margin-top:12px"></div></div>`;
+  const pin=(t,a,o,ora,cere)=>a!=null?`<a href="https://www.google.com/maps?q=${a},${o}" target="_blank" rel="noopener">📍${t}</a> `:(cere&&ora?`<span class="state">⚠${t}</span> `:'');
+  const us=await api('/utilizatori'),ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
+  const rand=x=>`<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.nume)} ${esc(x.prenume)}</b><br><small class="state">${esc(x.functie||'—')}</small></span><span class="tag">${ore(x)}</span></div>`;
+  const ac=us.filter(x=>x.activ),fo=us.filter(x=>!x.activ);
+  $('#lst').innerHTML=`<b>Colegi (${ac.length})</b>`+ac.map(rand).join('')+(fo.length?`<p class="state" style="margin-top:12px">Foști colegi</p>`+fo.map(rand).join(''):'');
+  const load=async()=>{const L=$('#m').value;
+    api('/rezumat?toti=1&luna='+L).then(z=>{$('#rzz').innerHTML=`<table><tr><th>Coleg</th><th class="n">Lucrate</th><th class="n">Normă</th><th class="n">±</th></tr>${z.map(x=>`<tr><td>${esc(x.nume)} ${esc(x.prenume)}</td><td class="n">${x.lucrate}</td><td class="n">${x.norma}</td><td class="n">${x.diferenta>0?'+':''}${x.diferenta}</td></tr>`).join('')}</table>`});
+    const rows=await api('/pontaje?toti=1&luna='+L);
+    $('#t').innerHTML=rows.length?`<table><tr><th>Data</th><th>Coleg</th><th>V–P</th><th>Loc.</th><th class="n">Ore</th></tr>${rows.map(r=>`<tr><td>${r.data.slice(8)}.${r.data.slice(5,7)}</td><td>${esc(r.nume)} ${esc(r.prenume)}</td><td>${r.ora_venire||''}–${r.ora_plecare||''}</td><td>${pin('V',r.venire_lat,r.venire_lon,r.ora_venire,r.cere_loc)}${pin('P',r.plecare_lat,r.plecare_lon,r.ora_plecare,r.cere_loc)}</td><td class="n">${r.total_ore??''}</td></tr>`).join('')}</table>`:'<p class="state">Niciun pontaj.</p>'};
+  $('#m').onchange=load;
+  $('#x').onclick=async()=>{const b=await api('/export?luna='+$('#m').value);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='pontaj-'+$('#m').value+'.csv';a.click()};
+  load();
+}
+
+async function admView(){
+  app.innerHTML=`<h1>Admin</h1>
+  <div class="card"><b>Datele firmei (antet)</b><label>Denumire</label><input id="fd"><label>CUI</label><input id="fc"><label>Adresă</label><input id="fa"><label>Contact (telefon / email)</label><input id="ft2"><p class="err" id="ef"></p><button style="width:100%" id="fb">Salvează datele firmei</button></div>
+  <div class="card"><b>Informare GDPR</b><p class="state">Textul pe care îl văd colegii la prima intrare. Dacă îl modifici, toți vor confirma din nou la următoarea intrare.</p><textarea id="gx" rows="12" style="width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:inherit;color:inherit"></textarea><p class="err" id="eh"></p><button style="width:100%;margin-top:8px" id="gs">Salvează textul</button></div>
+  ${S.superadmin?`<div class="card"><b>Firme (doar tu vezi asta)</b><div id="fl"></div></div>
+  <div class="card"><b>Firmă nouă</b><label>Denumire</label><input id="gd"><label>CUI</label><input id="gc"><label>Adresă</label><input id="ga"><label>Contact</label><input id="gt"><label>Administrator firmă: utilizator</label><input id="gu" autocapitalize="none"><label>Nume</label><input id="gn"><label>Prenume</label><input id="gp"><label>Parolă inițială (minim 6)</label><input id="gw" autocomplete="off"><p class="err" id="eg"></p><button style="width:100%" id="gb">Creează firma</button></div>`:''}
+  <div class="card"><b>Parola mea</b><label>Parola actuală</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['pv','pn'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="ep"></p><button style="width:100%" id="pb">Schimbă parola</button></div>
+  <div class="card"><b>Colegi</b><div id="cl"></div></div>
+  <div class="card"><b id="ft">Coleg nou</b><label>Utilizator</label><input id="nu" autocapitalize="none"><label>Nume</label><input id="nn"><label>Prenume</label><input id="np"><label>Funcție</label><input id="nf"><label>Ore pe zi (8, 4, 2, 1…)</label><input id="no" type="number" min="0.5" max="12" step="0.5" value="8"><label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="nl" style="width:auto;margin:0">Cere locația la Venire și Plecare (colegi din teren)</label><div id="pww"><label>Parolă inițială (minim 6; colegul o schimbă la prima intrare)</label><input id="pw" autocomplete="off"></div>
+  <p class="err" id="e"></p><div class="row"><button style="flex:1" id="add">Adaugă</button><button class="sec" id="cn" hidden>Renunță</button></div></div>
+  <div class="card"><b>Cereri de concediu</b><div id="c"></div></div>
+  <div class="card"><b>Corecții de pontaj</b><div id="ct"></div></div>
+  <div class="card"><b>Grupuri de calendar</b><div id="gl"></div></div>
+  <div class="card"><b id="gt2">Grup nou</b><label>Nume</label><input id="gn2"><label>Persoane</label><div id="gm"></div><p class="err" id="eg2"></p><div class="row"><button style="flex:1" id="gs2">Creează grupul</button><button class="sec" id="gc2" hidden>Renunță</button></div></div>
+  <div class="card"><b>Corectează direct un pontaj</b><label>Coleg</label><select id="du"></select><label>Ziua</label><input type="date" id="dd"><label>Ora venirii</label><input type="time" id="dv"><label>Ora plecării</label><input type="time" id="dp"><label>Motiv</label><input id="dm"><p class="err" id="ed"></p><button style="width:100%" id="db">Salvează corecția</button></div>
+  <div class="card"><b>Zile CO</b><label>Coleg</label><select id="zu"></select><div id="zs" style="margin-bottom:12px"></div><label>An</label><select id="za"><option>2025</option><option>2026</option></select><label>Zile alocate</label><input id="zz" type="number" step="0.5" min="0"><p class="err" id="ez"></p><button style="width:100%" id="zb">Salvează zilele</button></div>
+  <div class="card"><b>Notificări</b><p class="state">Trimite acum reminderele, ca test.</p><button class="sec" style="width:100%" id="rm">Trimite acum remindere de test</button></div>`;
+  let us=await api('/utilizatori'),edit=null;
+  const ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
+  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button>${x.id===S.id?'':` <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
+  const fillZ=()=>{const o=us.filter(x=>x.activ).map(x=>`<option value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</option>`).join('');$('#zu').innerHTML=o;$('#du').innerHTML=o};
+  const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s[$('#za').value].alocat};
+  const form=x=>{edit=x||null;$('#ft').textContent=x?'Modifică coleg':'Coleg nou';
+    $('#nu').value=x?x.username:'';$('#nu').disabled=!!x;$('#nn').value=x?x.nume:'';$('#np').value=x?x.prenume:'';$('#nf').value=x?x.functie:'';$('#no').value=x?x.ore_zi:8;$('#nl').checked=!!(x&&x.locatie);$('#pw').value='';
+    $('#pww').hidden=!!x;$('#add').textContent=x?'Salvează':'Adaugă';$('#cn').hidden=!x;$('#e').textContent=''};
+  $('#pb').onclick=async()=>{try{await post('/parola',{veche:$('#pv').value,noua:$('#pn').value});$('#pv').value=$('#pn').value='';$('#ep').innerHTML='<span class="ok">Parola a fost schimbată.</span>'}catch(x){$('#ep').textContent=x.message}};
+  $('#cl').onclick=async e=>{const d=e.target.dataset;
+    if(d.m){form(us.find(x=>x.id==d.m));$('#ft').scrollIntoView({behavior:'smooth'});return}
+    if(d.a&&(d.v==='1'||confirm('Dezactivezi contul? Istoricul pontajelor rămâne.'))){try{await post(`/utilizatori/${d.a}/activ/${d.v}`);us.find(x=>x.id==d.a).activ=+d.v;cl();fillZ();zl()}catch(x){alert(x.message)}}};
+  $('#cn').onclick=()=>form(null);
+  $('#add').onclick=async()=>{try{
+    const b={nume:$('#nn').value,prenume:$('#np').value,functie:$('#nf').value,ore_zi:+$('#no').value,locatie:$('#nl').checked?1:0};
+    if(edit)await api('/utilizatori/'+edit.id,{method:'PUT',body:JSON.stringify(b)});
+    else await post('/utilizatori',{...b,username:$('#nu').value.trim(),parola:$('#pw').value});
+    us=await api('/utilizatori');cl();fillZ();zl();form(null);$('#e').innerHTML='<span class="ok">Salvat.</span>';
+  }catch(x){$('#e').textContent=x.message}};
+  const conc=async()=>{const azi=new Date().toISOString().slice(0,10),r=(await api('/concedii?toti=1')).filter(c=>c.status==='in asteptare'||(c.status==='aprobat'&&c.pana_la>=azi));
+    $('#c').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)}<br><small class="state">${perioada(c)} · ${esc(c.tip)} · ${esc(c.status)}</small></span><span>${c.status==='aprobat'?'':`<button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button> `}<button class="sec" data-x="${c.id}">Anulează</button></span></div>`).join(''):'<p class="state">Nicio cerere activă.</p>'};
+  $('#c').onclick=async e=>{const d=e.target.dataset;if(d.i)await post(`/concedii/${d.i}/${d.s}`);else if(d.x&&confirm('Anulezi cererea? Zilele revin în sold.'))await api('/concedii/'+d.x,{method:'DELETE'});else return;conc();zl()};
+  $('#zu').onchange=$('#za').onchange=zl;
+  $('#zb').onclick=async()=>{try{await api('/zile-co',{method:'PUT',body:JSON.stringify({user_id:+$('#zu').value,an:+$('#za').value,zile:+$('#zz').value||0})});$('#ez').innerHTML='<span class="ok">Salvat.</span>';zl()}catch(x){$('#ez').textContent=x.message}};
+  $('#rm').onclick=async()=>{try{const r=await post('/push/remindere-acum');alert('Notificări trimise: '+r.trimise)}catch(x){alert(x.message)}};
+  const ct=async()=>{const r=(await api('/corectii?toti=1')).filter(c=>c.status==='in asteptare');
+    $('#ct').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)} · ${c.data.slice(8)}.${c.data.slice(5,7)}<br><small class="state">acum: ${c.actual_venire||'—'} → ${c.actual_plecare||'—'}<br>cerut: ${c.ora_venire||'—'} → ${c.ora_plecare||'—'}<br>${esc(c.motiv)}</small></span><span><button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button></span></div>`).join(''):'<p class="state">Nicio cerere în așteptare.</p>'};
+  $('#ct').onclick=async e=>{const d=e.target.dataset;if(d.i){try{await post(`/corectii/${d.i}/${d.s}`);ct()}catch(x){alert(x.message)}}};
+  $('#dd').value=new Date().toISOString().slice(0,10);
+  $('#db').onclick=async()=>{try{await post('/corectii-admin',{user_id:+$('#du').value,data:$('#dd').value,ora_venire:$('#dv').value||null,ora_plecare:$('#dp').value||null,motiv:$('#dm').value});['dv','dp','dm'].forEach(i=>$('#'+i).value='');$('#ed').innerHTML='<span class="ok">Corecție salvată.</span>'}catch(x){$('#ed').textContent=x.message}};
+  let gr=[],gEdit=null;
+  const gform=()=>{$('#gm').innerHTML=us.filter(x=>x.activ).map(x=>`<label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" style="width:auto;margin:0" value="${x.id}" ${gEdit&&gEdit.membri.some(m=>m.id===x.id)?'checked':''}>${esc(x.nume)} ${esc(x.prenume)}</label>`).join('');
+    $('#gn2').value=gEdit?gEdit.nume:'';$('#gt2').textContent=gEdit?'Modifică grupul':'Grup nou';$('#gs2').textContent=gEdit?'Salvează':'Creează grupul';$('#gc2').hidden=!gEdit};
+  const gl=async()=>{gr=await api('/grupuri');$('#gl').innerHTML=gr.length?gr.map(g=>`<div class="row" style="padding:6px 0;flex-wrap:wrap"><span><b>${esc(g.nume)}</b><br><small class="state">${g.membri.length} persoane</small></span><span><button class="sec" data-e="${g.id}">Modifică</button> <button class="sec" data-d="${g.id}">Șterge</button></span></div>`).join(''):'<p class="state">Niciun grup încă.</p>'};
+  $('#gl').onclick=async e=>{const d=e.target.dataset;if(d.e){gEdit=gr.find(g=>g.id==d.e);gform()}else if(d.d&&confirm('Ștergi grupul? Calendarele persoanelor nu se șterg.')){await api('/grupuri/'+d.d,{method:'DELETE'});gEdit=null;gform();gl()}};
+  $('#gc2').onclick=()=>{gEdit=null;gform()};
+  $('#gs2').onclick=async()=>{try{const b={nume:$('#gn2').value,membri:[...document.querySelectorAll('#gm input:checked')].map(i=>+i.value)};
+    if(gEdit)await api('/grupuri/'+gEdit.id,{method:'PUT',body:JSON.stringify(b)});else await post('/grupuri',b);
+    gEdit=null;gform();gl();$('#eg2').textContent=''}catch(x){$('#eg2').textContent=x.message}};
+  gform();gl();
+  api('/gdpr').then(g=>{$('#gx').value=g.text});
+  $('#gs').onclick=async()=>{try{const g=await api('/gdpr-text',{method:'PUT',body:JSON.stringify({text:$('#gx').value})});$('#gx').value=g.text;$('#eh').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#eh').textContent=x.message}};
+  const F=S.firma||{};$('#fd').value=F.denumire||'';$('#fc').value=F.cui||'';$('#fa').value=F.adresa||'';$('#ft2').value=F.contact||'';
+  $('#fb').onclick=async()=>{try{S.firma=await api('/firma',{method:'PUT',body:JSON.stringify({denumire:$('#fd').value,cui:$('#fc').value,adresa:$('#fa').value,contact:$('#ft2').value})});localStorage.setItem('pontaj',JSON.stringify(S));antet();$('#ef').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#ef').textContent=x.message}};
+  if(S.superadmin){
+    const fl=async()=>{const f=await api('/firme');$('#fl').innerHTML=f.map(x=>`<div class="row" style="padding:8px 0"><span><b>${esc(x.denumire)}</b>${x.activ?'':' <span class="tag">dezactivată</span>'}<br><small class="state">${x.colegi} colegi activi${x.cui?' · CUI '+esc(x.cui):''}</small></span>${x.id===S.firma.id?'':`<button class="sec" data-f="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</div>`).join('')};
+    $('#fl').onclick=async e=>{const d=e.target.dataset;if(d.f&&(d.v==='1'||confirm('Dezactivezi firma? Nimeni din firmă nu se mai poate conecta, dar datele rămân.'))){try{await post(`/firme/${d.f}/activ/${d.v}`);fl()}catch(x){alert(x.message)}}};
+    $('#gb').onclick=async()=>{try{await post('/firme',{denumire:$('#gd').value,cui:$('#gc').value,adresa:$('#ga').value,contact:$('#gt').value,admin_username:$('#gu').value.trim(),admin_nume:$('#gn').value,admin_prenume:$('#gp').value,admin_parola:$('#gw').value});['gd','gc','ga','gt','gu','gn','gp','gw'].forEach(i=>$('#'+i).value='');$('#eg').innerHTML='<span class="ok">Firmă creată. Dă administratorului utilizatorul și parola inițială.</span>';fl()}catch(x){$('#eg').textContent=x.message}};
+    fl();
+  }
+  cl();fillZ();conc();ct();zl();
+}
+
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+render();
+</script>
+</body>
+</html>
