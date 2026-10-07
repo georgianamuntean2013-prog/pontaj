@@ -85,7 +85,7 @@ function render(){
 }
 
 function parolaView(){
-  app.innerHTML=`<h1>Alege o parolă nouă</h1><div class="card"><p class="state">Ai intrat cu parola primită. Alege acum o parolă personală, pe care o știi doar tu.</p><label>Parola primită</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><p class="err" id="e"></p><button style="width:100%" id="pb">Salvează parola</button></div>`;
+  app.innerHTML=`<h1>Alege o parolă nouă</h1><div class="card"><p class="state">Ai intrat cu parola primită. Alege acum o parolă personală, pe care o știi doar tu.</p><label>Parola primită</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['pv','pn'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="e"></p><button style="width:100%" id="pb">Salvează parola</button></div>`;
   $('#pb').onclick=async()=>{try{await post('/parola',{veche:$('#pv').value,noua:$('#pn').value});S.schimba=0;localStorage.setItem('pontaj',JSON.stringify(S));render()}catch(x){$('#e').textContent=x.message}};
 }
 
@@ -102,7 +102,7 @@ async function gdprView(){
 
 function loginView(){
   app.innerHTML=`<h1>Pontaj</h1><div class="card"><label>Utilizator</label><input id="u" autocomplete="username" autocapitalize="none">
-  <label>Parolă</label><input id="p" type="password" autocomplete="current-password"><p class="err" id="e"></p><button style="width:100%" id="go">Intră</button></div>`;
+  <label>Parolă</label><input id="p" type="password" autocomplete="current-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['p'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="e"></p><button style="width:100%" id="go">Intră</button></div>`;
   const go=async()=>{try{S=await post('/login',{username:$('#u').value.trim(),parola:$('#p').value});localStorage.setItem('pontaj',JSON.stringify(S));render()}catch(x){$('#e').textContent=x.message}};
   $('#go').onclick=go;$('#p').onkeydown=e=>e.key==='Enter'&&go();
 }
@@ -263,7 +263,7 @@ async function admView(){
   <div class="card"><b>Informare GDPR</b><p class="state">Textul pe care îl văd colegii la prima intrare. Dacă îl modifici, toți vor confirma din nou la următoarea intrare.</p><textarea id="gx" rows="12" style="width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:inherit;color:inherit"></textarea><p class="err" id="eh"></p><button style="width:100%;margin-top:8px" id="gs">Salvează textul</button></div>
   ${S.superadmin?`<div class="card"><b>Firme (doar tu vezi asta)</b><div id="fl"></div></div>
   <div class="card"><b>Firmă nouă</b><label>Denumire</label><input id="gd"><label>CUI</label><input id="gc"><label>Adresă</label><input id="ga"><label>Contact</label><input id="gt"><label>Administrator firmă: utilizator</label><input id="gu" autocapitalize="none"><label>Nume</label><input id="gn"><label>Prenume</label><input id="gp"><label>Parolă inițială (minim 6)</label><input id="gw" autocomplete="off"><p class="err" id="eg"></p><button style="width:100%" id="gb">Creează firma</button></div>`:''}
-  <div class="card"><b>Parola mea</b><label>Parola actuală</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><p class="err" id="ep"></p><button style="width:100%" id="pb">Schimbă parola</button></div>
+  <div class="card"><b>Parola mea</b><label>Parola actuală</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['pv','pn'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="ep"></p><button style="width:100%" id="pb">Schimbă parola</button></div>
   <div class="card"><b>Colegi</b><div id="cl"></div></div>
   <div class="card"><b id="ft">Coleg nou</b><label>Utilizator</label><input id="nu" autocapitalize="none"><label>Nume</label><input id="nn"><label>Prenume</label><input id="np"><label>Funcție</label><input id="nf"><label>Ore pe zi (8, 4, 2, 1…)</label><input id="no" type="number" min="0.5" max="12" step="0.5" value="8"><label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="nl" style="width:auto;margin:0">Cere locația la Venire și Plecare (colegi din teren)</label><div id="pww"><label>Parolă inițială (minim 6; colegul o schimbă la prima intrare)</label><input id="pw" autocomplete="off"></div>
   <p class="err" id="e"></p><div class="row"><button style="flex:1" id="add">Adaugă</button><button class="sec" id="cn" hidden>Renunță</button></div></div>
