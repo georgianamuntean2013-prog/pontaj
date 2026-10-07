@@ -207,15 +207,16 @@ class Concediu(BaseModel):
 
 @app.post("/api/login")
 def login(b: Login):
-    n, until = fails.get(b.username, (0, 0))
+    cheie = b.username.strip().lower()
+    n, until = fails.get(cheie, (0, 0))
     if until > time.time():
         raise HTTPException(429, "Prea multe incercari. Reincearca in 5 minute.")
-    u = q("""SELECT * FROM utilizatori WHERE username=? AND COALESCE(activ,1)=1
-             AND firma_id IN (SELECT id FROM firme WHERE COALESCE(activ,1)=1)""", (b.username,), one=True)
+    u = q("""SELECT * FROM utilizatori WHERE LOWER(username)=? AND COALESCE(activ,1)=1
+             AND firma_id IN (SELECT id FROM firme WHERE COALESCE(activ,1)=1)""", (cheie,), one=True)
     if not u or not secrets.compare_digest(u["hash"], hp(b.parola, u["salt"])):
-        fails[b.username] = (n + 1, time.time() + 300 if n + 1 >= 5 else 0)
+        fails[cheie] = (n + 1, time.time() + 300 if n + 1 >= 5 else 0)
         raise HTTPException(401, "Utilizator sau parola gresita.")
-    fails.pop(b.username, None)
+    fails.pop(cheie, None)
     tok = secrets.token_urlsafe(32)
     q("INSERT INTO sesiuni VALUES(?,?,?)", (tok, u["id"], time.time()), write=True)
     return {"token": tok, **profil(u)}
@@ -317,6 +318,8 @@ def creeaza(b: NewUser, a=Depends(admin)):
         raise HTTPException(422, "Parola trebuie sa aiba minim 6 caractere.")
     if not 0.5 <= b.ore_zi <= 12:
         raise HTTPException(422, "Orele pe zi trebuie sa fie intre 0,5 si 12.")
+    if q("SELECT 1 FROM utilizatori WHERE LOWER(username)=LOWER(?)", (b.username.strip(),), one=True):
+        raise HTTPException(409, "Numele de utilizator exista deja in aplicatie. Alege altul, de exemplu cu numele firmei la final.")
     try:
         return {"id": add_user(b.username.strip(), b.nume.strip(), b.prenume.strip(), b.parola, b.admin, b.functie.strip(), b.ore_zi, a["firma_id"], 1, 1 if b.locatie else 0)}
     except sqlite3.IntegrityError:
@@ -704,7 +707,7 @@ def firma_noua(b: FirmaNoua, _=Depends(owner)):
         raise HTTPException(422, "Completeaza denumirea firmei si utilizatorul + numele administratorului.")
     if len(b.admin_parola) < 6:
         raise HTTPException(422, "Parola initiala trebuie sa aiba minim 6 caractere.")
-    if q("SELECT 1 FROM utilizatori WHERE username=?", (user,), one=True):
+    if q("SELECT 1 FROM utilizatori WHERE LOWER(username)=LOWER(?)", (user,), one=True):
         raise HTTPException(409, "Numele de utilizator exista deja in aplicatie. Alege altul.")
     fid = q("INSERT INTO firme(denumire,cui,adresa,contact) VALUES(?,?,?,?)",
             (b.denumire.strip(), b.cui.strip(), b.adresa.strip(), b.contact.strip()), write=True)
