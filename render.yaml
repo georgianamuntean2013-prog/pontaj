@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: pontaj
+    runtime: python
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: date
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PONTAJ_DB
+        value: /data/pontaj.db
+      - key: ADMIN_USER
+        value: georgiana
+      - key: ADMIN_PASS
+        sync: false
