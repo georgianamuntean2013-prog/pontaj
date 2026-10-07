@@ -53,15 +53,19 @@ class _Redirect(HTTPRedirectHandler):
 
 
 def descarca(url):
-    url = url_sigur(url)
-    req = Request(url, headers={"User-Agent": "Pontaj-Calendar/1.0", "Accept": "text/calendar"})
+    url = url_sigur("".join(url.split()))  # fara spatii sau rupturi de rand strecurate la copiere
+    # Outlook raspunde cu eroarea 400 clientilor care nu se prezinta ca un browser
+    req = Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "text/calendar, text/plain;q=0.9, */*;q=0.8"})
     try:
         with build_opener(_Redirect).open(req, timeout=15) as r:
             brut = r.read(MAX_BYTES + 1)
     except EroareCalendar:
         raise
     except HTTPError as e:
-        raise EroareCalendar(f"Serverul calendarului a raspuns cu eroarea {e.code}. Verifica linkul.")
+        raise EroareCalendar(f"Serverul calendarului a raspuns cu eroarea {e.code}. Verifica linkul: trebuie sa fie linkul ICS "
+                             "(se termina cu .ics), copiat intreg, fara spatii.")
     except Exception:
         raise EroareCalendar("Nu am putut descarca calendarul. Verifica linkul.")
     if len(brut) > MAX_BYTES:
