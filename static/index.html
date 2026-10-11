@@ -57,7 +57,7 @@ const ym=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function api(path,opt={}){
-  const r=await fetch('/api'+path,{...opt,headers:{'Content-Type':'application/json',...(S?{Authorization:'Bearer '+S.token}:{}),...opt.headers}}).catch(()=>{throw new Error('Nu mă pot conecta la server. Verifică dacă aplicația rulează și dacă ai internet.')});
+  const r=await fetch('/api'+path,{...opt,headers:{'Content-Type':'application/json',...(S?{Authorization:'Bearer '+S.token}:{}),...(S&&S.ctx&&!/^\/(eu|parola|login|gdpr)(\?|$)/.test(path)?{'X-Firma':String(S.ctx)}:{}),...opt.headers}}).catch(()=>{throw new Error('Nu mă pot conecta la server. Verifică dacă aplicația rulează și dacă ai internet.')});
   if(r.status===401&&S){S=null;localStorage.removeItem('pontaj');render();throw new Error('Sesiune expirată.')}
   if(!r.ok){const e=await r.json().catch(()=>({}));
     if(r.status===403&&/informarea/.test(e.detail||'')&&S&&!S.gdpr){S.gdpr=1;localStorage.setItem('pontaj',JSON.stringify(S));render()}
@@ -69,15 +69,21 @@ const post=(p,b)=>api(p,{method:'POST',body:b?JSON.stringify(b):undefined});
 function antet(){const h=$('#hd');
   if(S&&!S.firma){api('/eu').then(p=>{S={...S,...p};localStorage.setItem('pontaj',JSON.stringify(S));render()}).catch(()=>{})}
   if(!S||!S.firma){h.hidden=true;return}
-  const f=S.firma;h.hidden=false;h.innerHTML=`<b>${esc(f.denumire)}</b><small>${[f.cui&&'CUI '+esc(f.cui),esc(f.adresa),esc(f.contact)].filter(Boolean).join(' · ')}</small>`}
+  const f=S.ctx&&S.ctxF?S.ctxF:S.firma;h.hidden=false;
+  h.innerHTML=`<b>${esc(f.denumire)}</b><small>${[f.cui&&'CUI '+esc(f.cui),esc(f.adresa),esc(f.contact)].filter(Boolean).join(' · ')}</small>`;
+  if(S.superadmin){
+    if(!S.firme){api('/firme').then(l=>{S.firme=l;render()}).catch(()=>{});return}
+    if(S.firme.length>1){h.insertAdjacentHTML('beforeend',`<label style="display:block;margin-top:6px"><small>Administrezi firma:</small> <select id="cx">${S.firme.map(x=>`<option value="${x.id}" ${x.id===(S.ctx||S.firma.id)?'selected':''}>${esc(x.denumire)}${x.id===S.firma.id?' (a ta)':''}</option>`).join('')}</select></label>`);
+      $('#cx').onchange=e=>{const id=+e.target.value;S.ctx=id===S.firma.id?0:id;S.ctxF=S.ctx?S.firme.find(x=>x.id===id):null;tab=S.ctx?'ech':'azi';localStorage.setItem('pontaj',JSON.stringify(S));render()}}}}
 
 function render(){
   clearInterval(tick);antet();
   if(!S){nav.hidden=true;return loginView()}
   if(S.schimba){nav.hidden=true;return parolaView()}
   if(S.gdpr){nav.hidden=true;return gdprView()}
-  const tabs=[['azi','Azi'],['luna','Luna'],['conc','Concedii'],['cal','Calendar']];
-  if(S.admin)tabs.push(['ech','Echipă'],['adm','Admin']);
+  const tabs=S.ctx?[['ech','Echipă'],['adm','Admin']]:[['azi','Azi'],['luna','Luna'],['conc','Concedii'],['cal','Calendar']];
+  if(S.admin&&!S.ctx)tabs.push(['ech','Echipă'],['adm','Admin']);
+  if(S.ctx&&!['ech','adm'].includes(tab))tab='ech';
   nav.hidden=false;
   nav.innerHTML=tabs.map(([k,t])=>`<button class="${k===tab?'on':''}" data-t="${k}">${t}</button>`).join('');
   nav.onclick=e=>{if(e.target.dataset.t){tab=e.target.dataset.t;render()}};
@@ -276,7 +282,7 @@ async function admView(){
   <div class="card"><b>Notificări</b><p class="state">Trimite acum reminderele, ca test.</p><button class="sec" style="width:100%" id="rm">Trimite acum remindere de test</button></div>`;
   let us=await api('/utilizatori'),edit=null;
   const ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
-  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button>${x.id===S.id?'':` <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
+  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.admin?' <span class="tag">admin</span>':''}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button>${x.id===S.id||x.superadmin?'':` <button class="sec" data-g="${x.id}" data-v="${x.admin?0:1}">${x.admin?'Scoate admin':'Fă admin'}</button> <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
   const fillZ=()=>{const o=us.filter(x=>x.activ).map(x=>`<option value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</option>`).join('');$('#zu').innerHTML=o;$('#du').innerHTML=o};
   const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s[$('#za').value].alocat};
   const form=x=>{edit=x||null;$('#ft').textContent=x?'Modifică coleg':'Coleg nou';
@@ -285,6 +291,7 @@ async function admView(){
   $('#pb').onclick=async()=>{try{await post('/parola',{veche:$('#pv').value,noua:$('#pn').value});$('#pv').value=$('#pn').value='';$('#ep').innerHTML='<span class="ok">Parola a fost schimbată.</span>'}catch(x){$('#ep').textContent=x.message}};
   $('#cl').onclick=async e=>{const d=e.target.dataset;
     if(d.m){form(us.find(x=>x.id==d.m));$('#ft').scrollIntoView({behavior:'smooth'});return}
+    if(d.g){try{await post(`/utilizatori/${d.g}/admin/${d.v}`);us.find(x=>x.id==d.g).admin=+d.v;cl()}catch(x){alert(x.message)}return}
     if(d.a&&(d.v==='1'||confirm('Dezactivezi contul? Istoricul pontajelor rămâne.'))){try{await post(`/utilizatori/${d.a}/activ/${d.v}`);us.find(x=>x.id==d.a).activ=+d.v;cl();fillZ();zl()}catch(x){alert(x.message)}}};
   $('#cn').onclick=()=>form(null);
   $('#add').onclick=async()=>{try{
@@ -314,13 +321,13 @@ async function admView(){
     if(gEdit)await api('/grupuri/'+gEdit.id,{method:'PUT',body:JSON.stringify(b)});else await post('/grupuri',b);
     gEdit=null;gform();gl();$('#eg2').textContent=''}catch(x){$('#eg2').textContent=x.message}};
   gform();gl();
-  api('/gdpr').then(g=>{$('#gx').value=g.text});
+  api('/gdpr-text').then(g=>{$('#gx').value=g.text});
   $('#gs').onclick=async()=>{try{const g=await api('/gdpr-text',{method:'PUT',body:JSON.stringify({text:$('#gx').value})});$('#gx').value=g.text;$('#eh').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#eh').textContent=x.message}};
-  const F=S.firma||{};$('#fd').value=F.denumire||'';$('#fc').value=F.cui||'';$('#fa').value=F.adresa||'';$('#ft2').value=F.contact||'';
-  $('#fb').onclick=async()=>{try{S.firma=await api('/firma',{method:'PUT',body:JSON.stringify({denumire:$('#fd').value,cui:$('#fc').value,adresa:$('#fa').value,contact:$('#ft2').value})});localStorage.setItem('pontaj',JSON.stringify(S));antet();$('#ef').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#ef').textContent=x.message}};
+  const F=(S.ctx&&S.ctxF?S.ctxF:S.firma)||{};$('#fd').value=F.denumire||'';$('#fc').value=F.cui||'';$('#fa').value=F.adresa||'';$('#ft2').value=F.contact||'';
+  $('#fb').onclick=async()=>{try{const nf=await api('/firma',{method:'PUT',body:JSON.stringify({denumire:$('#fd').value,cui:$('#fc').value,adresa:$('#fa').value,contact:$('#ft2').value})});if(S.ctx){S.ctxF={...S.ctxF,...nf}}else S.firma=nf;S.firme=null;localStorage.setItem('pontaj',JSON.stringify(S));antet();$('#ef').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#ef').textContent=x.message}};
   if(S.superadmin){
-    const fl=async()=>{const f=await api('/firme');$('#fl').innerHTML=f.map(x=>`<div class="row" style="padding:8px 0"><span><b>${esc(x.denumire)}</b>${x.activ?'':' <span class="tag">dezactivată</span>'}<br><small class="state">${x.colegi} colegi activi${x.cui?' · CUI '+esc(x.cui):''}</small></span>${x.id===S.firma.id?'':`<button class="sec" data-f="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</div>`).join('')};
-    $('#fl').onclick=async e=>{const d=e.target.dataset;if(d.f&&(d.v==='1'||confirm('Dezactivezi firma? Nimeni din firmă nu se mai poate conecta, dar datele rămân.'))){try{await post(`/firme/${d.f}/activ/${d.v}`);fl()}catch(x){alert(x.message)}}};
+    const fl=async()=>{const f=await api('/firme');$('#fl').innerHTML=f.map(x=>`<div class="row" style="padding:8px 0"><span><b>${esc(x.denumire)}</b>${x.activ?'':' <span class="tag">dezactivată</span>'}<br><small class="state">${x.colegi} colegi activi${x.cui?' · CUI '+esc(x.cui):''}</small></span><span><button class="sec" data-c="${x.id}">Administrează</button> ${x.id===S.firma.id?'':`<button class="sec" data-f="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('');S.firme=f};
+    $('#fl').onclick=async e=>{const d=e.target.dataset;if(d.c){const id=+d.c;S.ctx=id===S.firma.id?0:id;S.ctxF=S.ctx?S.firme.find(x=>x.id===id):null;tab=S.ctx?'ech':'azi';localStorage.setItem('pontaj',JSON.stringify(S));render();return}if(d.f&&(d.v==='1'||confirm('Dezactivezi firma? Nimeni din firmă nu se mai poate conecta, dar datele rămân.'))){try{await post(`/firme/${d.f}/activ/${d.v}`);fl()}catch(x){alert(x.message)}}};
     $('#gb').onclick=async()=>{try{await post('/firme',{denumire:$('#gd').value,cui:$('#gc').value,adresa:$('#ga').value,contact:$('#gt').value,admin_username:$('#gu').value.trim(),admin_nume:$('#gn').value,admin_prenume:$('#gp').value,admin_parola:$('#gw').value});['gd','gc','ga','gt','gu','gn','gp','gw'].forEach(i=>$('#'+i).value='');$('#eg').innerHTML='<span class="ok">Firmă creată. Dă administratorului utilizatorul și parola inițială.</span>';fl()}catch(x){$('#eg').textContent=x.message}};
     fl();
   }
