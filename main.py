@@ -353,6 +353,22 @@ def activ(uid: int, val: int, a=Depends(admin)):
     return {"ok": True}
 
 
+@app.post("/api/utilizatori/{uid}/reset-parola")
+def reseteaza_parola(uid: int, a=Depends(admin)):
+    if uid == a["id"]:
+        raise HTTPException(422, "Parola ta o schimbi din sectiunea Parola.")
+    if not acelasi(uid, a["firma_id"]):
+        raise HTTPException(404, "Colegul nu exista.")
+    if q("SELECT superadmin FROM utilizatori WHERE id=?", (uid,), one=True)["superadmin"]:
+        raise HTTPException(403, "Parola proprietarului nu poate fi resetata de altcineva.")
+    nou = "".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(8))  # fara litere confundabile
+    salt = secrets.token_hex(8)
+    q("UPDATE utilizatori SET salt=?, hash=?, schimba_parola=1 WHERE id=?", (salt, hp(nou, salt), uid), write=True)
+    q("DELETE FROM sesiuni WHERE user_id=?", (uid,), write=True)  # il deconecteaza peste tot
+    fails.pop(q("SELECT LOWER(username) AS u FROM utilizatori WHERE id=?", (uid,), one=True)["u"], None)
+    return {"parola": nou}
+
+
 @app.post("/api/utilizatori/{uid}/admin/{val}")
 def seteaza_admin(uid: int, val: int, a=Depends(admin)):
     if uid == a["id"]:
