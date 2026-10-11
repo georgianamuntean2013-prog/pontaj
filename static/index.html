@@ -277,7 +277,7 @@ async function admView(){
   <div class="card"><b>Parola mea</b><label>Parola actuală</label><input id="pv" type="password" autocomplete="current-password"><label>Parola nouă (minim 6)</label><input id="pn" type="password" autocomplete="new-password"><label style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px"><input type="checkbox" style="width:auto;margin:0" onchange="['pv','pn'].forEach(i=>document.getElementById(i).type=this.checked?'text':'password')">Arată parola</label><p class="err" id="ep"></p><button style="width:100%" id="pb">Schimbă parola</button></div>
   <div class="card"><b>Colegi</b><div id="cl"></div></div>
   <div class="card"><b id="ft">Coleg nou</b><label>Utilizator</label><input id="nu" autocapitalize="none"><label>Nume</label><input id="nn"><label>Prenume</label><input id="np"><label>Funcție</label><input id="nf"><label>Ore pe zi (8, 4, 2, 1…)</label><input id="no" type="number" min="0.5" max="12" step="0.5" value="8"><label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="nl" style="width:auto;margin:0">Cere locația la Venire și Plecare (colegi din teren)</label><div id="pww"><label>Parolă inițială (minim 6; colegul o schimbă la prima intrare)</label><input id="pw" autocomplete="off"></div>
-  <p class="err" id="e"></p><div class="row"><button style="flex:1" id="add">Adaugă</button><button class="sec" id="cn" hidden>Renunță</button></div></div>
+  <div id="inv"></div><p class="err" id="e"></p><div class="row"><button style="flex:1" id="add">Adaugă</button><button class="sec" id="cn" hidden>Renunță</button></div></div>
   <div class="card"><b>Cereri de concediu</b><div id="c"></div></div>
   <div class="card"><b>Corecții de pontaj</b><div id="ct"></div></div>
   <div class="card"><b>Grupuri de calendar</b><div id="gl"></div></div>
@@ -287,7 +287,13 @@ async function admView(){
   <div class="card"><b>Notificări</b><p class="state">Trimite acum reminderele, ca test.</p><button class="sec" style="width:100%" id="rm">Trimite acum remindere de test</button></div>`;
   let us=await api('/utilizatori'),edit=null;
   const ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
-  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.admin?' <span class="tag">admin</span>':''}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button>${x.id===S.id||x.superadmin?'':` <button class="sec" data-g="${x.id}" data-v="${x.admin?0:1}">${x.admin?'Scoate admin':'Fă admin'}</button> <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
+  const invita=(un,pa,nume)=>{const f=(S.ctx&&S.ctxF?S.ctxF:S.firma).denumire,l=location.origin;
+    const t=`Bună${nume?' '+nume:''}! Ți-am făcut cont în aplicația de pontaj${f?' ('+f+')':''}.\nLink: ${l}\nUtilizator: ${un}\n${pa?'Parola inițială: '+pa+'\n(la prima conectare îți alegi o parolă a ta)':'Parola ți-a dat-o administratorul.'}\nPe telefon: deschide linkul în Safari/Chrome, apoi „Adaugă pe ecranul principal”.`;
+    $('#inv').innerHTML=`<div class="card" style="background:var(--bg);margin:0 0 12px"><b>Trimite colegului${pa?' (cont creat)':''}</b><textarea id="it" rows="7" readonly style="width:100%;margin:8px 0">${esc(t)}</textarea><div class="row" style="flex-wrap:wrap;gap:8px"><button class="sec" id="ic">Copiază mesajul</button><a class="sec" style="padding:10px 14px;text-decoration:none;border-radius:8px;border:1px solid var(--line);color:inherit" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(t)}">WhatsApp</a><a class="sec" style="padding:10px 14px;text-decoration:none;border-radius:8px;border:1px solid var(--line);color:inherit" href="mailto:?subject=${encodeURIComponent('Cont aplicație pontaj')}&body=${encodeURIComponent(t)}">Email</a>${navigator.share?'<button class="sec" id="is">Trimite…</button>':''}</div></div>`;
+    $('#ic').onclick=async()=>{try{await navigator.clipboard.writeText(t)}catch(_){$('#it').select();document.execCommand('copy')}$('#ic').textContent='Copiat ✓'};
+    if($('#is'))$('#is').onclick=()=>navigator.share({text:t}).catch(()=>{});
+    $('#inv').scrollIntoView({behavior:'smooth'})};
+  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.admin?' <span class="tag">admin</span>':''}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button> <button class="sec" data-l="${x.id}">Trimite link</button>${x.id===S.id||x.superadmin?'':` <button class="sec" data-g="${x.id}" data-v="${x.admin?0:1}">${x.admin?'Scoate admin':'Fă admin'}</button> <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
   const fillZ=()=>{const o=us.filter(x=>x.activ).map(x=>`<option value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</option>`).join('');$('#zu').innerHTML=o;$('#du').innerHTML=o};
   const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s[$('#za').value].alocat};
   const form=x=>{edit=x||null;$('#ft').textContent=x?'Modifică coleg':'Coleg nou';
@@ -296,14 +302,17 @@ async function admView(){
   $('#pb').onclick=async()=>{try{await post('/parola',{veche:$('#pv').value,noua:$('#pn').value});$('#pv').value=$('#pn').value='';$('#ep').innerHTML='<span class="ok">Parola a fost schimbată.</span>'}catch(x){$('#ep').textContent=x.message}};
   $('#cl').onclick=async e=>{const d=e.target.dataset;
     if(d.m){form(us.find(x=>x.id==d.m));$('#ft').scrollIntoView({behavior:'smooth'});return}
+    if(d.l){const x=us.find(y=>y.id==d.l);invita(x.username,'',x.prenume||x.nume);return}
     if(d.g){try{await post(`/utilizatori/${d.g}/admin/${d.v}`);us.find(x=>x.id==d.g).admin=+d.v;cl()}catch(x){alert(x.message)}return}
     if(d.a&&(d.v==='1'||confirm('Dezactivezi contul? Istoricul pontajelor rămâne.'))){try{await post(`/utilizatori/${d.a}/activ/${d.v}`);us.find(x=>x.id==d.a).activ=+d.v;cl();fillZ();zl()}catch(x){alert(x.message)}}};
   $('#cn').onclick=()=>form(null);
   $('#add').onclick=async()=>{try{
     const b={nume:$('#nn').value,prenume:$('#np').value,functie:$('#nf').value,ore_zi:+$('#no').value,locatie:$('#nl').checked?1:0};
+    let inv=null;
     if(edit)await api('/utilizatori/'+edit.id,{method:'PUT',body:JSON.stringify(b)});
-    else await post('/utilizatori',{...b,username:$('#nu').value.trim(),parola:$('#pw').value});
+    else{const un=$('#nu').value.trim(),pa=$('#pw').value;await post('/utilizatori',{...b,username:un,parola:pa});inv=[un,pa,b.prenume||b.nume]}
     us=await api('/utilizatori');cl();fillZ();zl();form(null);$('#e').innerHTML='<span class="ok">Salvat.</span>';
+    if(inv)invita(inv[0],inv[1],inv[2]);
   }catch(x){$('#e').textContent=x.message}};
   const conc=async()=>{const azi=new Date().toISOString().slice(0,10),r=(await api('/concedii?toti=1')).filter(c=>c.status==='in asteptare'||(c.status==='aprobat'&&c.pana_la>=azi));
     $('#c').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)}<br><small class="state">${perioada(c)} · ${esc(c.tip)} · ${esc(c.status)}</small></span><span>${c.status==='aprobat'?'':`<button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button> `}<button class="sec" data-x="${c.id}">Anulează</button></span></div>`).join(''):'<p class="state">Nicio cerere activă.</p>'};
