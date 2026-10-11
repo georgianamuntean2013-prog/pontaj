@@ -136,7 +136,20 @@ def me(request: Request, authorization: str = Header(default="")):
         raise HTTPException(403, "Trebuie sa-ti schimbi parola inainte de a continua.")
     if request.url.path not in ("/api/parola", "/api/eu", "/api/gdpr") and not acord_ok(u):
         raise HTTPException(403, "Trebuie sa confirmi informarea privind datele personale.")
+    u = dict(u)
+    u["firma_real"] = u["firma_id"]
+    if u["superadmin"]:  # proprietarul poate administra oricare firma, prin antetul X-Firma
+        f = request.headers.get("x-firma", "")
+        if f.isdigit() and int(f) != u["firma_id"] and q("SELECT 1 FROM firme WHERE id=?", (int(f),), one=True):
+            u["firma_id"] = int(f)
     return u
+
+
+def firma_proprie(u):
+    try:
+        return u["firma_real"]
+    except (KeyError, IndexError):
+        return u["firma_id"]
 
 
 def admin(u=Depends(me)):
@@ -156,7 +169,7 @@ def acelasi(uid, firma):
 
 
 def profil(u):
-    f = q("SELECT id,denumire,cui,adresa,contact FROM firme WHERE id=?", (u["firma_id"],), one=True)
+    f = q("SELECT id,denumire,cui,adresa,contact FROM firme WHERE id=?", (firma_proprie(u),), one=True)
     return {"nume": u["nume"], "prenume": u["prenume"], "admin": u["admin"], "id": u["id"],
             "superadmin": u["superadmin"], "schimba": u["schimba_parola"], "firma": dict(f),
             "gdpr": 0 if acord_ok(u) else 1, "locatie": u["locatie"]}
@@ -309,7 +322,7 @@ def export(luna: str, a=Depends(admin)):
 
 @app.get("/api/utilizatori")
 def utilizatori(a=Depends(admin)):
-    return [dict(r) for r in q("SELECT id,username,nume,prenume,admin,COALESCE(activ,1) AS activ,COALESCE(functie,'') AS functie,COALESCE(ore_zi,8) AS ore_zi, COALESCE(locatie,0) AS locatie, COALESCE((SELECT raspuns FROM acorduri WHERE user_id=utilizatori.id AND versiune=?),0) AS gdpr FROM utilizatori WHERE firma_id=? ORDER BY nume", (gdpr_info(a["firma_id"])["versiune"], a["firma_id"]))]
+    return [dict(r) for r in q("SELECT id,username,nume,prenume,admin,COALESCE(superadmin,0) AS superadmin,COALESCE(activ,1) AS activ,COALESCE(functie,'') AS functie,COALESCE(ore_zi,8) AS ore_zi, COALESCE(locatie,0) AS locatie, COALESCE((SELECT raspuns FROM acorduri WHERE user_id=utilizatori.id AND versiune=?),0) AS gdpr FROM utilizatori WHERE firma_id=? ORDER BY nume", (gdpr_info(a["firma_id"])["versiune"], a["firma_id"]))]
 
 
 @app.post("/api/utilizatori")
@@ -332,9 +345,23 @@ def activ(uid: int, val: int, a=Depends(admin)):
         raise HTTPException(422, "Nu te poti dezactiva pe tine.")
     if not acelasi(uid, a["firma_id"]):
         raise HTTPException(404, "Colegul nu exista.")
+    if q("SELECT superadmin FROM utilizatori WHERE id=?", (uid,), one=True)["superadmin"]:
+        raise HTTPException(403, "Proprietarul aplicatiei nu poate fi dezactivat.")
     q("UPDATE utilizatori SET activ=? WHERE id=?", (1 if val else 0, uid), write=True)
     if not val:
         q("DELETE FROM sesiuni WHERE user_id=?", (uid,), write=True)  # il deconecteaza imediat
+    return {"ok": True}
+
+
+@app.post("/api/utilizatori/{uid}/admin/{val}")
+def seteaza_admin(uid: int, val: int, a=Depends(admin)):
+    if uid == a["id"]:
+        raise HTTPException(422, "Nu iti poti schimba propriile drepturi.")
+    if not acelasi(uid, a["firma_id"]):
+        raise HTTPException(404, "Colegul nu exista.")
+    if q("SELECT superadmin FROM utilizatori WHERE id=?", (uid,), one=True)["superadmin"]:
+        raise HTTPException(403, "Drepturile proprietarului nu pot fi schimbate.")
+    q("UPDATE utilizatori SET admin=? WHERE id=?", (1 if val else 0, uid), write=True)
     return {"ok": True}
 
 
@@ -691,7 +718,8 @@ def modifica_firma(b: DateFirma, a=Depends(admin)):
         raise HTTPException(422, "Scrie denumirea firmei.")
     q("UPDATE firme SET denumire=?, cui=?, adresa=?, contact=? WHERE id=?",
       (b.denumire.strip(), b.cui.strip(), b.adresa.strip(), b.contact.strip(), a["firma_id"]), write=True)
-    return profil(a)["firma"]
+    f = q("SELECT id,denumire,cui,adresa,contact FROM firme WHERE id=?", (a["firma_id"],), one=True)
+    return dict(f)
 
 
 @app.get("/api/firme")
@@ -717,7 +745,7 @@ def firma_noua(b: FirmaNoua, _=Depends(owner)):
 
 @app.post("/api/firme/{fid}/activ/{val}")
 def firma_activ(fid: int, val: int, o=Depends(owner)):
-    if fid == o["firma_id"]:
+    if fid == firma_proprie(o):
         raise HTTPException(422, "Nu iti poti dezactiva propria firma.")
     q("UPDATE firme SET activ=? WHERE id=?", (1 if val else 0, fid), write=True)
     if not val:  # deconecteaza imediat toata firma
@@ -760,7 +788,7 @@ def gdpr_info(firma_id):
 
 
 def acord_ok(u):
-    r = q("SELECT raspuns FROM acorduri WHERE user_id=? AND versiune=?", (u["id"], gdpr_info(u["firma_id"])["versiune"]), one=True)
+    r = q("SELECT raspuns FROM acorduri WHERE user_id=? AND versiune=?", (u["id"], gdpr_info(firma_proprie(u))["versiune"]), one=True)
     return bool(r and r["raspuns"])
 
 
@@ -780,17 +808,22 @@ class TextGdpr(BaseModel):
 
 @app.get("/api/gdpr")
 def gdpr(u=Depends(me)):
-    return gdpr_info(u["firma_id"])
+    return gdpr_info(firma_proprie(u))
 
 
 @app.post("/api/gdpr")
 def gdpr_raspuns(b: Acord, u=Depends(me)):
-    if b.versiune != gdpr_info(u["firma_id"])["versiune"]:
+    if b.versiune != gdpr_info(firma_proprie(u))["versiune"]:
         raise HTTPException(409, "Informarea s-a schimbat. Reincarca pagina.")
     inregistreaza_acord(u["id"], b.versiune, b.raspuns)
     if not b.raspuns:  # fara confirmare nu poate folosi aplicatia
         q("DELETE FROM sesiuni WHERE user_id=?", (u["id"],), write=True)
     return {"ok": True}
+
+
+@app.get("/api/gdpr-text")
+def gdpr_text_citeste(a=Depends(admin)):
+    return gdpr_info(a["firma_id"])
 
 
 @app.put("/api/gdpr-text")
