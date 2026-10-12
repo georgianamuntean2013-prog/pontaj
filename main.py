@@ -92,10 +92,11 @@ def init():
     if not q("SELECT 1 FROM firme LIMIT 1", one=True):
         q("INSERT INTO firme(id,denumire) VALUES(1,'Firma mea')", write=True)  # firma existenta, o redenumesti din Admin
     q("CREATE TABLE IF NOT EXISTS acorduri(user_id INTEGER, versiune TEXT, raspuns INTEGER, data TEXT, PRIMARY KEY(user_id,versiune))", write=True)
-    try:
-        q("ALTER TABLE firme ADD COLUMN gdpr_text TEXT DEFAULT ''", write=True)
-    except sqlite3.OperationalError:
-        pass
+    for col in ("gdpr_text", "rem_plecare"):
+        try:
+            q(f"ALTER TABLE firme ADD COLUMN {col} TEXT DEFAULT ''", write=True)
+        except sqlite3.OperationalError:
+            pass
     q("""CREATE TABLE IF NOT EXISTS corectii(id INTEGER PRIMARY KEY, user_id INTEGER, data TEXT, ora_venire TEXT,
          ora_plecare TEXT, motiv TEXT, status TEXT, creat TEXT, decis_de INTEGER, decis_la TEXT,
          vechi_venire TEXT, vechi_plecare TEXT)""", write=True)
@@ -703,6 +704,19 @@ def de_reamintit(zi, firma=None):
     return [r["user_id"] for r in rows]
 
 
+def la_lucru(zi, firma=None):
+    """Cei care au pontat venirea azi si nu au pontat inca plecarea."""
+    rows = q("""SELECT DISTINCT a.user_id FROM push_abonari a JOIN utilizatori u ON u.id=a.user_id
+        JOIN pontaje p ON p.user_id=a.user_id AND p.data=?
+        WHERE COALESCE(u.activ,1)=1 AND p.ora_venire IS NOT NULL AND p.ora_plecare IS NULL
+          AND (? IS NULL OR u.firma_id=?)""", (zi, firma, firma))
+    return [r["user_id"] for r in rows]
+
+
+def remindere_plecare(zi, firma=None):
+    return sum(trimite(uid, "Program încheiat", "Nu uita să apeși Plecare.") for uid in la_lucru(zi, firma))
+
+
 SLOTURI = {"07:50": ("Pontaj", "Nu uita să apeși Venire."),
            "08:10": ("Nu ai pontat încă", "Apasă Venire dacă ai început lucrul.")}
 
@@ -732,6 +746,14 @@ def bucla():
                 t = acum.replace(hour=h, minute=m, second=0, microsecond=0)
                 if t <= acum < t + timedelta(minutes=5) and claim(zi, slot):
                     remindere(slot, zi)
+            for f in q("SELECT id, rem_plecare FROM firme WHERE COALESCE(activ,1)=1 AND COALESCE(rem_plecare,'')<>''"):
+                try:
+                    h, m = map(int, f["rem_plecare"].split(":"))
+                except ValueError:
+                    continue
+                t = acum.replace(hour=h, minute=m, second=0, microsecond=0)
+                if t <= acum < t + timedelta(minutes=5) and claim(zi, f"plecare:{f['id']}:{f['rem_plecare']}"):
+                    remindere_plecare(zi, f["id"])
         except Exception as e:
             print("Eroare remindere:", e)
         time.sleep(30)
@@ -765,6 +787,30 @@ def push_test(u=Depends(me)):
 @app.post("/api/push/remindere-acum")
 def remindere_acum(a=Depends(admin)):
     return {"trimise": remindere("08:10", datetime.now(TZ).strftime("%Y-%m-%d"), a["firma_id"])}
+
+
+class SetariFirma(BaseModel):
+    rem_plecare: str = ""
+
+
+@app.get("/api/setari-firma")
+def setari_firma(a=Depends(admin)):
+    f = q("SELECT COALESCE(rem_plecare,'') AS rem_plecare FROM firme WHERE id=?", (a["firma_id"],), one=True)
+    return {"rem_plecare": f["rem_plecare"]}
+
+
+@app.put("/api/setari-firma")
+def salveaza_setari_firma(b: SetariFirma, a=Depends(admin)):
+    ora = b.rem_plecare.strip()
+    if ora and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", ora):
+        raise HTTPException(422, "Ora nu e valida. Foloseste formatul 16:30.")
+    q("UPDATE firme SET rem_plecare=? WHERE id=?", (ora, a["firma_id"]), write=True)
+    return {"rem_plecare": ora}
+
+
+@app.post("/api/push/plecare-acum")
+def plecare_acum(a=Depends(admin)):
+    return {"trimise": remindere_plecare(datetime.now(TZ).strftime("%Y-%m-%d"), a["firma_id"])}
 
 
 NORMA = 8.0  # 8:00-16:30 minus pauza 11:30-12:00
