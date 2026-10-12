@@ -77,7 +77,7 @@ def init():
             q(f"ALTER TABLE concedii ADD COLUMN {col} TEXT", write=True)
         except sqlite3.OperationalError:
             pass
-    for col, tip in (("functie", "TEXT DEFAULT ''"), ("ore_zi", "REAL DEFAULT 8")):
+    for col, tip in (("functie", "TEXT DEFAULT ''"), ("ore_zi", "REAL DEFAULT 8"), ("co_an", "REAL"), ("data_ang", "TEXT")):
         try:
             q(f"ALTER TABLE utilizatori ADD COLUMN {col} {tip}", write=True)
         except sqlite3.OperationalError:
@@ -466,17 +466,37 @@ def zile_lucratoare(a, b, an=None):
 
 
 def sold(uid):
+    """Zile CO dinamice: in fiecare luna se acumuleaza anual/12 (21 zile/an = 1,75 pe luna)."""
+    azi = datetime.now(TZ).date()
+    an = azi.year
+    u = q("SELECT co_an, data_ang FROM utilizatori WHERE id=?", (uid,), one=True)
     al = {r["an"]: r["zile"] for r in q("SELECT an,zile FROM zile_co WHERE user_id=?", (uid,))}
+    anual = u["co_an"] if u["co_an"] is not None else al.get(an, 21)
+    reportate = al.get(an - 1, 0)
 
-    def folosit(status, an):
+    def folosit(status, a):
         rows = q("SELECT de_la,pana_la FROM concedii WHERE user_id=? AND tip='concediu' AND status=?", (uid, status))
-        return sum(zile_lucratoare(c["de_la"], c["pana_la"], an) for c in rows)
+        return sum(zile_lucratoare(c["de_la"], c["pana_la"], a) for c in rows)
 
-    u25, u26 = folosit("aprobat", 2025), folosit("aprobat", 2026)
-    r25 = al.get(2025, 0) - u25
-    din_25 = min(max(r25, 0), u26)  # zilele din 2026 se scad intai din soldul lui 2025
-    return {"2025": {"alocat": al.get(2025, 0), "ramase": r25 - din_25},
-            "2026": {"alocat": al.get(2026, 0), "ramase": al.get(2026, 0) - (u26 - din_25)},
+    luni = azi.month
+    da = u["data_ang"]
+    if da:
+        try:
+            d = date.fromisoformat(da)
+            luni = 0 if d.year > an else (luni - d.month + 1 if d.year == an else luni)
+        except ValueError:
+            pass
+    luni = max(0, luni)
+    acumulate = round(anual / 12 * luni, 2)
+    fol_prev, fol_cur = folosit("aprobat", an - 1), folosit("aprobat", an)
+    r_prev = reportate - fol_prev
+    din_prev = min(max(r_prev, 0), fol_cur)  # zilele din anul curent se scad intai din cele reportate
+    din_cur = fol_cur - din_prev
+    return {"an": an,
+            "prev": {"an": an - 1, "alocat": reportate, "ramase": r_prev - din_prev},
+            "cur": {"an": an, "anual": anual, "luni": luni, "acumulate": acumulate, "folosite": din_cur,
+                    "ramase_acum": round(acumulate - din_cur, 2), "ramase_an": round(anual - din_cur, 2)},
+            "setari": {"co_an": anual, "data_ang": da or "", "reportate": reportate},
             "in_asteptare": folosit("in asteptare", None)}
 
 
@@ -487,6 +507,32 @@ def zile_co(user_id: int = 0, u=Depends(me)):
     if user_id and user_id != u["id"] and not acelasi(user_id, u["firma_id"]):
         raise HTTPException(404, "Colegul nu exista.")
     return sold(user_id or u["id"])
+
+
+class SetariCO(BaseModel):
+    user_id: int
+    co_an: float = 21
+    data_ang: str = ""
+    reportate: float = 0
+
+
+@app.put("/api/zile-co/setari")
+def setari_co(b: SetariCO, a=Depends(admin)):
+    if not acelasi(b.user_id, a["firma_id"]):
+        raise HTTPException(404, "Colegul nu exista.")
+    if not 0 <= b.co_an <= 60 or not 0 <= b.reportate <= 60:
+        raise HTTPException(422, "Numarul de zile nu e valid.")
+    da = b.data_ang.strip()
+    if da:
+        try:
+            date.fromisoformat(da)
+        except ValueError:
+            raise HTTPException(422, "Data angajarii nu e valida.")
+    q("UPDATE utilizatori SET co_an=?, data_ang=? WHERE id=?", (b.co_an, da or None, b.user_id), write=True)
+    an = datetime.now(TZ).year - 1
+    q("""INSERT INTO zile_co(user_id,an,zile) VALUES(?,?,?)
+         ON CONFLICT(user_id,an) DO UPDATE SET zile=excluded.zile""", (b.user_id, an, b.reportate), write=True)
+    return sold(b.user_id)
 
 
 @app.put("/api/zile-co")
