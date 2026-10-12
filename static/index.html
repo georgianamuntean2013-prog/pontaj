@@ -55,7 +55,10 @@ header#hd{background:var(--card);border-bottom:1px solid var(--line);padding:10p
 <script>
 const $=s=>document.querySelector(s), app=$('#app'), nav=$('#nav');
 let S=JSON.parse(localStorage.getItem('pontaj')||'null'), tab='azi', today=null, tick;
-const soldHtml=s=>`<div class="row" style="justify-content:flex-start;gap:28px"><div><div class="clock" style="font-size:2.2rem">${s[2025].ramase}</div><small class="state">zile CO 2025</small></div><div><div class="clock" style="font-size:2.2rem">${s[2026].ramase}</div><small class="state">zile CO 2026</small></div></div>${s.in_asteptare?`<small class="state">${s.in_asteptare} zile așteaptă aprobarea</small>`:''}`;
+const nz=n=>String(Math.round(n*100)/100).replace('.',',');
+const soldHtml=s=>{const c=s.cur,p=s.prev,tot=Math.round((c.ramase_acum+Math.max(p.ramase,0))*100)/100;
+  return `<div class="row" style="justify-content:flex-start;gap:28px;align-items:flex-end"><div><div class="clock" style="font-size:2.2rem">${nz(tot)}</div><small class="state">zile CO disponibile acum</small></div></div>
+  <small class="state" style="display:block;margin-top:6px">${c.an}: ai acumulat ${nz(c.acumulate)} zile din ${nz(c.anual)} pe an (${nz(c.anual/12)} pe lună), ai luat ${nz(c.folosite)}, rămân ${nz(c.ramase_acum)}.${p.alocat||p.ramase?`<br>Reportate din ${p.an}: ${nz(Math.max(p.ramase,0))} zile.`:''}${s.in_asteptare?`<br>${s.in_asteptare} zile așteaptă aprobarea.`:''}</small>`};
 const perioada=c=>c.ora_de_la?`${c.de_la} ${c.ora_de_la}–${c.ora_pana_la}`:`${c.de_la} → ${c.pana_la}`;
 const pad=n=>String(n).padStart(2,'0');
 const ym=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
@@ -286,7 +289,7 @@ async function admView(){
   <div class="card"><b>Grupuri de calendar</b><div id="gl"></div></div>
   <div class="card"><b id="gt2">Grup nou</b><label>Nume</label><input id="gn2"><label>Persoane</label><div id="gm"></div><p class="err" id="eg2"></p><div class="row"><button style="flex:1" id="gs2">Creează grupul</button><button class="sec" id="gc2" hidden>Renunță</button></div></div>
   <div class="card"><b>Corectează direct un pontaj</b><label>Coleg</label><select id="du"></select><label>Ziua</label><input type="date" id="dd"><label>Ora venirii</label><input type="time" id="dv"><label>Ora plecării</label><input type="time" id="dp"><label>Motiv</label><input id="dm"><p class="err" id="ed"></p><button style="width:100%" id="db">Salvează corecția</button></div>
-  <div class="card"><b>Zile CO</b><label>Coleg</label><select id="zu"></select><div id="zs" style="margin-bottom:12px"></div><label>An</label><select id="za"><option>2025</option><option>2026</option></select><label>Zile alocate</label><input id="zz" type="number" step="0.5" min="0"><p class="err" id="ez"></p><button style="width:100%" id="zb">Salvează zilele</button></div>
+  <div class="card"><b>Zile CO</b><label>Coleg</label><select id="zu"></select><div id="zs" style="margin-bottom:12px"></div><label>Zile CO pe an (legal 21 = 1,75 pe lună)</label><input id="zz" type="number" step="0.5" min="0" max="60"><label>Data angajării (dacă a început în acest an)</label><input id="zd" type="date"><label>Zile reportate din anul trecut</label><input id="zr" type="number" step="0.5" min="0" max="60"><p class="err" id="ez"></p><button style="width:100%" id="zb">Salvează</button></div>
   <div class="card"><b>Notificări</b><p class="state">Trimite acum reminderele, ca test.</p><button class="sec" style="width:100%" id="rm">Trimite acum remindere de test</button></div>`;
   let us=await api('/utilizatori'),edit=null;
   const ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
@@ -298,7 +301,7 @@ async function admView(){
     $('#inv').scrollIntoView({behavior:'smooth'})};
   const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.admin?' <span class="tag">admin</span>':''}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button> <button class="sec" data-l="${x.id}">Trimite link</button>${x.id===S.id||x.superadmin?'':` <button class="sec" data-r="${x.id}">Resetează parola</button>`}${x.id===S.id||x.superadmin?'':` <button class="sec" data-g="${x.id}" data-v="${x.admin?0:1}">${x.admin?'Scoate admin':'Fă admin'}</button> <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
   const fillZ=()=>{const o=us.filter(x=>x.activ).map(x=>`<option value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</option>`).join('');$('#zu').innerHTML=o;$('#du').innerHTML=o};
-  const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s[$('#za').value].alocat};
+  const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s.setari.co_an;$('#zd').value=s.setari.data_ang;$('#zr').value=s.setari.reportate};
   const form=x=>{edit=x||null;$('#ft').textContent=x?'Modifică coleg':'Coleg nou';
     $('#nu').value=x?x.username:'';$('#nu').disabled=!!x;$('#nn').value=x?x.nume:'';$('#np').value=x?x.prenume:'';$('#nf').value=x?x.functie:'';$('#no').value=x?x.ore_zi:8;$('#nl').checked=!!(x&&x.locatie);$('#pw').value='';
     $('#pww').hidden=!!x;$('#add').textContent=x?'Salvează':'Adaugă';$('#cn').hidden=!x;$('#e').textContent=''};
@@ -322,8 +325,8 @@ async function admView(){
   const conc=async()=>{const azi=new Date().toISOString().slice(0,10),r=(await api('/concedii?toti=1')).filter(c=>c.status==='in asteptare'||(c.status==='aprobat'&&c.pana_la>=azi));
     $('#c').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)}<br><small class="state">${perioada(c)} · ${esc(c.tip)} · ${esc(c.status)}</small></span><span>${c.status==='aprobat'?'':`<button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button> `}<button class="sec" data-x="${c.id}">Anulează</button></span></div>`).join(''):'<p class="state">Nicio cerere activă.</p>'};
   $('#c').onclick=async e=>{const d=e.target.dataset;if(d.i)await post(`/concedii/${d.i}/${d.s}`);else if(d.x&&confirm('Anulezi cererea? Zilele revin în sold.'))await api('/concedii/'+d.x,{method:'DELETE'});else return;conc();zl()};
-  $('#zu').onchange=$('#za').onchange=zl;
-  $('#zb').onclick=async()=>{try{await api('/zile-co',{method:'PUT',body:JSON.stringify({user_id:+$('#zu').value,an:+$('#za').value,zile:+$('#zz').value||0})});$('#ez').innerHTML='<span class="ok">Salvat.</span>';zl()}catch(x){$('#ez').textContent=x.message}};
+  $('#zu').onchange=zl;
+  $('#zb').onclick=async()=>{try{const s=await api('/zile-co/setari',{method:'PUT',body:JSON.stringify({user_id:+$('#zu').value,co_an:+$('#zz').value||0,data_ang:$('#zd').value,reportate:+$('#zr').value||0})});$('#zs').innerHTML=soldHtml(s);$('#ez').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#ez').textContent=x.message}};
   $('#rm').onclick=async()=>{try{const r=await post('/push/remindere-acum');alert('Notificări trimise: '+r.trimise)}catch(x){alert(x.message)}};
   const ct=async()=>{const r=(await api('/corectii?toti=1')).filter(c=>c.status==='in asteptare');
     $('#ct').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)} · ${c.data.slice(8)}.${c.data.slice(5,7)}<br><small class="state">acum: ${c.actual_venire||'—'} → ${c.actual_plecare||'—'}<br>cerut: ${c.ora_venire||'—'} → ${c.ora_plecare||'—'}<br>${esc(c.motiv)}</small></span><span><button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button></span></div>`).join(''):'<p class="state">Nicio cerere în așteptare.</p>'};
