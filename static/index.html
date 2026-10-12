@@ -253,7 +253,7 @@ async function concView(){
 
 async function echView(){
   app.innerHTML=`<h1>Echipă</h1><div class="card" id="lst"></div>
-  <div class="card"><input type="month" id="m" value="${ym(new Date())}"><button class="sec" id="x" style="width:100%">Descarcă CSV</button><div class="wrap" id="rzz" style="margin-top:12px"></div><div class="wrap" id="t" style="margin-top:12px"></div></div>`;
+  <div class="card"><input type="month" id="m" value="${ym(new Date())}"><button class="sec" id="x" style="width:100%">Descarcă CSV</button><p class="state" id="xm"></p><div class="wrap" id="rzz" style="margin-top:12px"></div><div class="wrap" id="t" style="margin-top:12px"></div></div>`;
   const pin=(t,a,o,ora,cere)=>a!=null?`<a href="https://www.google.com/maps?q=${a},${o}" target="_blank" rel="noopener">📍${t}</a> `:(cere&&ora?`<span class="state">⚠${t}</span> `:'');
   const us=await api('/utilizatori'),ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
   const rand=x=>`<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.nume)} ${esc(x.prenume)}</b><br><small class="state">${esc(x.functie||'—')}</small></span><span class="tag">${ore(x)}</span></div>`;
@@ -264,7 +264,10 @@ async function echView(){
     const rows=await api('/pontaje?toti=1&luna='+L);
     $('#t').innerHTML=rows.length?`<table><tr><th>Data</th><th>Coleg</th><th>V–P</th><th>Loc.</th><th class="n">Ore</th></tr>${rows.map(r=>`<tr><td>${r.data.slice(8)}.${r.data.slice(5,7)}</td><td>${esc(r.nume)} ${esc(r.prenume)}</td><td>${r.ora_venire||''}–${r.ora_plecare||''}</td><td>${pin('V',r.venire_lat,r.venire_lon,r.ora_venire,r.cere_loc)}${pin('P',r.plecare_lat,r.plecare_lon,r.ora_plecare,r.cere_loc)}</td><td class="n">${r.total_ore??''}</td></tr>`).join('')}</table>`:'<p class="state">Niciun pontaj.</p>'};
   $('#m').onchange=load;
-  $('#x').onclick=async()=>{const b=await api('/export?luna='+$('#m').value);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='pontaj-'+$('#m').value+'.csv';a.click()};
+  $('#x').onclick=async()=>{try{const L=$('#m').value,b=await api('/export?luna='+L),n=(await b.text()).split('\n').filter(l=>l.trim()).length-1;
+    if(n<1){$('#xm').textContent='Nu există pontaje în această firmă pentru luna aleasă, deci nu am ce descărca.';return}
+    const f=(S.ctx&&S.ctxF?S.ctxF:S.firma).denumire.replace(/[^\w-]+/g,'_'),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='pontaj-'+f+'-'+L+'.csv';document.body.appendChild(a);a.click();a.remove();
+    $('#xm').textContent='Fișierul „'+a.download+'” ('+n+' rânduri) a fost descărcat. Îl găsești în folderul Descărcări.'}catch(e2){$('#xm').textContent=e2.message}};
   load();
 }
 
