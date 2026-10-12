@@ -320,12 +320,12 @@ def pontaje(luna: str, toti: int = 0, u=Depends(me)):
 @app.get("/api/export")
 def export(luna: str, a=Depends(admin)):
     buf = io.StringIO()
-    w = csv.writer(buf)
+    w = csv.writer(buf, delimiter=";")  # Excel in limba romana asteapta ; ca separator
     w.writerow(["Data", "Ora Venire", "Ora Plecare", "Pauza Masa", "Total Ore", "Nume", "Prenume", "Norma", "Diferenta"])
     for r in randuri(luna, None, a["firma_id"]):
         w.writerow([r["data"], r["ora_venire"], r["ora_plecare"], r["pauza_min"], r["total_ore"], r["nume"],
                     r["prenume"], r["norma"], r["diferenta"]])
-    return Response(buf.getvalue(), media_type="text/csv",
+    return Response(("\ufeff" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=pontaj-{luna}.csv"})
 
 
