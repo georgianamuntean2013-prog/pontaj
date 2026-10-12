@@ -20,6 +20,15 @@ from urllib.parse import urlparse
 TZ = ZoneInfo("Europe/Bucharest")
 DB = os.environ.get("PONTAJ_DB", "pontaj.db")
 app = FastAPI(title="Pontaj")
+
+
+@app.middleware("http")
+async def fara_cache_vechi(request: Request, call_next):
+    r = await call_next(request)
+    if not request.url.path.startswith("/api/"):  # pagina si fisierele ei: browserul verifica mereu versiunea noua
+        r.headers["Cache-Control"] = "no-cache"
+    return r
+
 fails = {}  # username -> (count, locked_until)
 
 
