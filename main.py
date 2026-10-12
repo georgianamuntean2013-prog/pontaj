@@ -1,4 +1,4 @@
-import base64, csv, hashlib, io, json, os, re, secrets, sqlite3, threading, time
+import base64, csv, hashlib, io, json, os, re, secrets, sqlite3, threading, time, zipfile
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo
@@ -315,6 +315,99 @@ def pontaje(luna: str, toti: int = 0, u=Depends(me)):
     if toti and not u["admin"]:
         raise HTTPException(403, "Doar administratorul poate vedea toti colegii.")
     return randuri(luna, None if toti else u["id"], u["firma_id"])
+
+
+def _col(i):
+    return chr(65 + i)
+
+
+def xlsx(antete, randuri_, latimi, tipuri, nume_foaie="Pontaj"):
+    """Fisier .xlsx minimal, fara biblioteci externe. tipuri: t=text, d=data, h=ora, n=numar cu 2 zecimale, i=intreg."""
+    from xml.sax.saxutils import escape
+    stil = {"t": 0, "d": 2, "h": 3, "n": 4, "i": 5}
+
+    def celula(ref, v, t):
+        if v is None or v == "":
+            return ""
+        if t == "d":
+            z = (date.fromisoformat(v) - date(1899, 12, 30)).days
+            return f'<c r="{ref}" s="2"><v>{z}</v></c>'
+        if t == "h":
+            hh, mm = map(int, v.split(":")[:2])
+            return f'<c r="{ref}" s="3"><v>{(hh * 60 + mm) / 1440 + 1e-7:.12f}</v></c>'
+        if t in ("n", "i"):
+            return f'<c r="{ref}" s="{stil[t]}"><v>{v}</v></c>'
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(str(v))}</t></is></c>'
+
+    rows = ['<row r="1">' + "".join(f'<c r="{_col(i)}1" s="1" t="inlineStr"><is><t>{escape(h)}</t></is></c>' for i, h in enumerate(antete)) + "</row>"]
+    for n, r in enumerate(randuri_, start=2):
+        rows.append(f'<row r="{n}">' + "".join(celula(f"{_col(i)}{n}", v, tipuri[i]) for i, v in enumerate(r)) + "</row>")
+    ultima = _col(len(antete) - 1)
+    foaie = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+             '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+             '<cols>' + "".join(f'<col min="{i+1}" max="{i+1}" width="{w}" customWidth="1"/>' for i, w in enumerate(latimi)) + '</cols>'
+             '<sheetData>' + "".join(rows) + '</sheetData>'
+             f'<autoFilter ref="A1:{ultima}{max(len(randuri_) + 1, 1)}"/></worksheet>')
+    stiluri = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+               '<numFmts count="2"><numFmt numFmtId="164" formatCode="dd.mm.yyyy"/><numFmt numFmtId="165" formatCode="hh:mm"/></numFmts>'
+               '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+               '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
+               '<fill><patternFill patternType="solid"><fgColor rgb="FFD9E2F3"/><bgColor indexed="64"/></patternFill></fill></fills>'
+               '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+               '<border><left/><right/><top/><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders>'
+               '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+               '<cellXfs count="6">'
+               '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+               '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center"/></xf>'
+               '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
+               '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
+               '<xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
+               '<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
+               '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+          '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+          '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+    wb = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
+          f'<sheet name="{escape(nume_foaie)}" sheetId="1" r:id="rId1"/></sheets></workbook>')
+    wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+              '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", wb)
+        z.writestr("xl/_rels/workbook.xml.rels", wbrels)
+        z.writestr("xl/styles.xml", stiluri)
+        z.writestr("xl/worksheets/sheet1.xml", foaie)
+    return buf.getvalue()
+
+
+ZILE = ["Luni", "Marți", "Miercuri", "Joi", "Vineri", "Sâmbătă", "Duminică"]
+
+
+def date_export(luna, firma):
+    rez = sorted(randuri(luna, None, firma), key=lambda r: (r["nume"] or "", r["prenume"] or "", r["data"]))
+    return [[r["nume"], r["prenume"], r["data"], ZILE[date.fromisoformat(r["data"]).weekday()], r["ora_venire"],
+             r["ora_plecare"], r["pauza_min"], r["total_ore"], r["norma"], r["diferenta"]] for r in rez]
+
+
+@app.get("/api/export-xlsx")
+def export_xlsx(luna: str, a=Depends(admin)):
+    if not re.fullmatch(r"\d{4}-\d{2}", luna):
+        raise HTTPException(422, "Luna nu e valida.")
+    antete = ["Nume", "Prenume", "Data", "Ziua", "Ora venire", "Ora plecare", "Pauză masă (min)", "Total ore lucrate", "Normă (ore)", "Diferență (ore)"]
+    continut = xlsx(antete, date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n"])
+    return Response(continut, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename=pontaj-{luna}.xlsx"})
 
 
 @app.get("/api/export")
