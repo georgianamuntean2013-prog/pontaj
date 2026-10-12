@@ -325,10 +325,16 @@ def xlsx(antete, randuri_, latimi, tipuri, nume_foaie="Pontaj"):
     """Fisier .xlsx minimal, fara biblioteci externe. tipuri: t=text, d=data, h=ora, n=numar cu 2 zecimale, i=intreg."""
     from xml.sax.saxutils import escape
     stil = {"t": 0, "d": 2, "h": 3, "n": 4, "i": 5}
+    from urllib.parse import quote
 
     def celula(ref, v, t):
         if v is None or v == "":
             return ""
+        if t == "m":  # locatie: (lat, lon) -> link catre harta; text -> mesaj simplu
+            if isinstance(v, tuple):
+                et = f"{v[0]:.5f}, {v[1]:.5f}"
+                return (f'<c r="{ref}" s="6" t="str"><f>HYPERLINK("https://www.google.com/maps?q={v[0]},{v[1]}","{et}")</f><v>{et}</v></c>')
+            return f'<c r="{ref}" t="inlineStr"><is><t>{escape(str(v))}</t></is></c>'
         if t == "d":
             z = (date.fromisoformat(v) - date(1899, 12, 30)).days
             return f'<c r="{ref}" s="2"><v>{z}</v></c>'
@@ -352,19 +358,20 @@ def xlsx(antete, randuri_, latimi, tipuri, nume_foaie="Pontaj"):
     stiluri = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
                '<numFmts count="2"><numFmt numFmtId="164" formatCode="dd.mm.yyyy"/><numFmt numFmtId="165" formatCode="hh:mm"/></numFmts>'
-               '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+               '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font></fonts>'
                '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
                '<fill><patternFill patternType="solid"><fgColor rgb="FFD9E2F3"/><bgColor indexed="64"/></patternFill></fill></fills>'
                '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
                '<border><left/><right/><top/><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders>'
                '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-               '<cellXfs count="6">'
+               '<cellXfs count="7">'
                '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
                '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center"/></xf>'
                '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
                '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
                '<xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
                '<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment horizontal="center"/></xf>'
+               '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment horizontal="center"/></xf>'
                '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
     ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
           '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -394,18 +401,26 @@ def xlsx(antete, randuri_, latimi, tipuri, nume_foaie="Pontaj"):
 ZILE = ["Luni", "Marți", "Miercuri", "Joi", "Vineri", "Sâmbătă", "Duminică"]
 
 
+def _loc_export(lat, lon, ora, cere):
+    if lat is not None and lon is not None:
+        return (lat, lon)
+    return "nu a trimis locația" if cere and ora else ""
+
+
 def date_export(luna, firma):
     rez = sorted(randuri(luna, None, firma), key=lambda r: (r["nume"] or "", r["prenume"] or "", r["data"]))
     return [[r["nume"], r["prenume"], r["data"], ZILE[date.fromisoformat(r["data"]).weekday()], r["ora_venire"],
-             r["ora_plecare"], r["pauza_min"], r["total_ore"], r["norma"], r["diferenta"]] for r in rez]
+             r["ora_plecare"], r["pauza_min"], r["total_ore"], r["norma"], r["diferenta"],
+             _loc_export(r["venire_lat"], r["venire_lon"], r["ora_venire"], r["cere_loc"]),
+             _loc_export(r["plecare_lat"], r["plecare_lon"], r["ora_plecare"], r["cere_loc"])] for r in rez]
 
 
 @app.get("/api/export-xlsx")
 def export_xlsx(luna: str, a=Depends(admin)):
     if not re.fullmatch(r"\d{4}-\d{2}", luna):
         raise HTTPException(422, "Luna nu e valida.")
-    antete = ["Nume", "Prenume", "Data", "Ziua", "Ora venire", "Ora plecare", "Pauză masă (min)", "Total ore lucrate", "Normă (ore)", "Diferență (ore)"]
-    continut = xlsx(antete, date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n"])
+    antete = ["Nume", "Prenume", "Data", "Ziua", "Ora venire", "Ora plecare", "Pauză masă (min)", "Total ore lucrate", "Normă (ore)", "Diferență (ore)", "Locație venire", "Locație plecare"]
+    continut = xlsx(antete, date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15, 22, 22], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n", "m", "m"])
     return Response(continut, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename=pontaj-{luna}.xlsx"})
 
