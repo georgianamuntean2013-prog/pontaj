@@ -114,7 +114,8 @@ def init():
          vizibil TEXT DEFAULT 'ocupat', ultima TEXT, eroare TEXT, nr INTEGER DEFAULT 0)""", write=True)
     q("CREATE TABLE IF NOT EXISTS evenimente(cal_id INTEGER, user_id INTEGER, inceput TEXT, sfarsit TEXT, titlu TEXT, privat INTEGER)", write=True)
     q("CREATE INDEX IF NOT EXISTS ev_user ON evenimente(user_id, inceput)", write=True)
-    for tabel, col in (("evenimente", "serie TEXT"), ("utilizatori", "viz_intern TEXT DEFAULT 'ocupat'")):
+    for tabel, col in (("evenimente", "serie TEXT"), ("evenimente", "sedinta TEXT"), ("evenimente", "organizator INTEGER"),
+                       ("utilizatori", "viz_intern TEXT DEFAULT 'ocupat'")):
         try:
             q(f"ALTER TABLE {tabel} ADD COLUMN {col}", write=True)
         except sqlite3.OperationalError:
@@ -1359,6 +1360,7 @@ class Programare(BaseModel):
     privat: int = 0
     repeta: str = ""  # "", "zilnic" (zile lucratoare), "saptamanal"
     repeta_pana: str = ""
+    participanti: list[int] = []  # sedinta: colegii invitati (in afara de organizator)
 
 
 class VizIntern(BaseModel):
@@ -1369,6 +1371,23 @@ def _ora(t):
     if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t or ""):
         raise HTTPException(422, "Ora nu e valida (ex. 14:30).")
     return t
+
+
+def invitabili(u):
+    """Cu cine poate face o sedinta: administratorul cu toata firma, ceilalti cu colegii din grupurile lor."""
+    if u["admin"]:
+        rows = q("SELECT id,nume,prenume FROM utilizatori WHERE firma_id=? AND COALESCE(activ,1)=1 ORDER BY nume", (u["firma_id"],))
+    else:
+        rows = q("""SELECT DISTINCT x.id,x.nume,x.prenume FROM membri_grup m1
+                    JOIN membri_grup m2 ON m2.grup_id=m1.grup_id JOIN utilizatori x ON x.id=m2.user_id
+                    JOIN grupuri g ON g.id=m1.grup_id
+                    WHERE m1.user_id=? AND g.firma_id=? AND COALESCE(x.activ,1)=1 ORDER BY x.nume""", (u["id"], u["firma_id"]))
+    return [dict(r) for r in rows if r["id"] != u["id"]]
+
+
+@app.get("/api/invitabili")
+def lista_invitabili(u=Depends(me)):
+    return invitabili(u)
 
 
 @app.post("/api/evenimente")
@@ -1403,23 +1422,52 @@ def programare_noua(b: Programare, u=Depends(me)):
         if len(zile) > 120:
             raise HTTPException(422, "Prea multe repetari. Alege un interval mai scurt.")
     serie = secrets.token_hex(6) if len(zile) > 1 else None
+    invitati = []
+    if b.participanti:
+        permisi = {x["id"]: x for x in invitabili(u)}
+        if any(i not in permisi for i in set(b.participanti) if i != u["id"]):
+            raise HTTPException(404, "Un coleg din lista nu poate fi invitat.")
+        invitati = [permisi[i] for i in dict.fromkeys(b.participanti) if i != u["id"]]
+    ocupati = []
+    for p in invitati:  # avertizare, doar cat arata colegul din calendarul lui
+        if any(x["de"] < int(pana[:2]) * 60 + int(pana[3:]) and x["pana"] > int(de[:2]) * 60 + int(de[3:])
+               for x in blocuri_zi(p["id"], zile[0].isoformat(), u["id"])[0]):
+            ocupati.append(f"{p['nume']} {p['prenume']}".strip())
     for d in zile:
         inc = datetime.fromisoformat(f"{d.isoformat()}T{de}:00").replace(tzinfo=TZ)
         fin = datetime.fromisoformat(f"{d.isoformat()}T{pana}:00").replace(tzinfo=TZ)
-        q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie) VALUES(0,?,?,?,?,?,?)",
-          (u["id"], iso(inc), iso(fin), titlu, 1 if b.privat else 0, serie), write=True)
-    return {"adaugate": len(zile)}
+        if not invitati:
+            q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie) VALUES(0,?,?,?,?,?,?)",
+              (u["id"], iso(inc), iso(fin), titlu, 1 if b.privat else 0, serie), write=True)
+            continue
+        sed = secrets.token_hex(6)  # aceeasi sedinta, in agenda fiecarui participant
+        for uid in [u["id"]] + [p["id"] for p in invitati]:
+            q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie,sedinta,organizator) VALUES(0,?,?,?,?,0,?,?,?)",
+              (uid, iso(inc), iso(fin), titlu, serie, sed, u["id"]), write=True)
+    if invitati:
+        cand = f"{zile[0].strftime('%d.%m')} {de}" + (f" (si inca {len(zile) - 1} repetari)" if len(zile) > 1 else "")
+        for p in invitati:
+            trimite(p["id"], "Sedinta noua", f"{titlu}, {cand}. Organizator: {u['nume']} {u['prenume']}".strip())
+    return {"adaugate": len(zile), "invitati": len(invitati), "ocupati": ocupati}
 
 
 @app.delete("/api/evenimente/{rid}")
 def programare_sterge(rid: int, serie: int = 0, u=Depends(me)):
-    r = q("SELECT rowid AS id, serie FROM evenimente WHERE rowid=? AND user_id=? AND cal_id=0", (rid, u["id"]), one=True)
+    """Organizatorul sterge sedinta pentru toti; un participant doar o scoate din agenda lui."""
+    r = q("""SELECT rowid AS id, serie, sedinta, organizator, user_id FROM evenimente
+             WHERE rowid=? AND cal_id=0 AND (user_id=? OR organizator=?)""", (rid, u["id"], u["id"]), one=True)
     if not r:
         raise HTTPException(404, "Programarea nu exista.")
+    eu_org = r["organizator"] == u["id"]
     if serie and r["serie"]:
-        q("DELETE FROM evenimente WHERE serie=? AND user_id=? AND cal_id=0", (r["serie"], u["id"]), write=True)
+        if eu_org:
+            q("DELETE FROM evenimente WHERE serie=? AND cal_id=0 AND organizator=?", (r["serie"], u["id"]), write=True)
+        else:
+            q("DELETE FROM evenimente WHERE serie=? AND user_id=? AND cal_id=0", (r["serie"], u["id"]), write=True)
+    elif eu_org and r["sedinta"]:
+        q("DELETE FROM evenimente WHERE sedinta=? AND organizator=?", (r["sedinta"], u["id"]), write=True)
     else:
-        q("DELETE FROM evenimente WHERE rowid=?", (rid,), write=True)
+        q("DELETE FROM evenimente WHERE rowid=? AND user_id=?", (rid, r["user_id"]), write=True)
     return {"ok": True}
 
 
@@ -1436,9 +1484,16 @@ def agenda(data: str, u=Depends(me)):
                   WHERE e.user_id=? AND e.inceput<? AND e.sfarsit>? ORDER BY e.inceput""", (u["id"], iso(sf), iso(inc))):
         a = datetime.fromisoformat(r["inceput"]).replace(tzinfo=timezone.utc).astimezone(TZ)
         b = datetime.fromisoformat(r["sfarsit"]).replace(tzinfo=timezone.utc).astimezone(TZ)
+        sed = None
+        if r["sedinta"]:
+            pers = [f"{x['nume']} {x['prenume']}".strip() for x in q(
+                "SELECT x.nume,x.prenume FROM evenimente e JOIN utilizatori x ON x.id=e.user_id WHERE e.sedinta=? ORDER BY x.nume", (r["sedinta"],))]
+            org = q("SELECT nume,prenume FROM utilizatori WHERE id=?", (r["organizator"],), one=True)
+            sed = {"participanti": pers, "eu_org": r["organizator"] == u["id"],
+                   "organizator": f"{org['nume']} {org['prenume']}".strip() if org else ""}
         rez.append({"id": r["id"], "titlu": r["titlu"], "de": a.strftime("%H:%M") if a >= inc else "00:00",
                     "pana": b.strftime("%H:%M") if b <= sf else "24:00", "privat": r["privat"],
-                    "intern": r["cal_id"] == 0, "serie": bool(r["serie"]), "sursa": r["sursa"] or ""})
+                    "intern": r["cal_id"] == 0, "serie": bool(r["serie"]), "sursa": r["sursa"] or "", "sedinta": sed})
     return rez
 
 
