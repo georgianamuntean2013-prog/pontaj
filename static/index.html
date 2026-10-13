@@ -181,6 +181,18 @@ async function lunaView(){
 async function calView(){
   const hm=m=>pad(Math.floor(m/60))+':'+pad(m%60),zi=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
   app.innerHTML=`<h1>Calendar</h1>
+  <div class="card"><b>Agenda mea</b><p class="state">Programările tale, adăugate direct aici. Se văd și pe telefon, și pe laptop.</p>
+  <div class="row" style="margin-bottom:8px"><button class="sec" id="agP">◀</button><input type="date" id="agD" value="${zi(new Date())}" style="margin:0"><button class="sec" id="agN">▶</button></div>
+  <div id="agL"></div>
+  <details style="margin-top:12px"><summary><b>Adaugă o programare</b></summary>
+  <label>Titlu</label><input id="agT" maxlength="120" placeholder="ex. Întâlnire cu clientul">
+  <label>Data</label><input type="date" id="agDt" value="${zi(new Date())}">
+  <div class="row" style="gap:8px"><div style="flex:1"><label>De la</label><input type="time" id="agDe" value="10:00"></div><div style="flex:1"><label>Până la</label><input type="time" id="agPa" value="11:00"></div></div>
+  <label style="display:flex;align-items:center;gap:8px;margin:4px 0 12px"><input type="checkbox" id="agPriv" style="width:auto;margin:0">Privat (colegii nu văd titlul)</label>
+  <label>Repetare</label><select id="agRep"><option value="">Nu se repetă</option><option value="zilnic">În fiecare zi lucrătoare</option><option value="saptamanal">În fiecare săptămână</option></select>
+  <div id="agRw" hidden><label>Se repetă până la</label><input type="date" id="agRp"></div>
+  <p class="err" id="agE"></p><button style="width:100%" id="agB">Adaugă programarea</button>
+  <label style="margin-top:16px">Ce văd colegii din grup din programările mele</label><select id="agViz"><option value="ocupat">Doar „ocupat”, fără titlu</option><option value="detalii">Titlul (cele private rămân ascunse)</option><option value="ascuns">Nu le arăta</option></select></details></div>
   <div class="card"><b>Cine ce face</b><select id="gr"></select>
   <div class="row" style="margin-bottom:8px"><button class="sec" id="zp">◀</button><input type="date" id="zd" value="${zi(new Date())}" style="margin:0"><button class="sec" id="zn">▶</button></div>
   <div class="wrap" id="gv"></div><p class="state" id="gi"></p></div>
@@ -198,6 +210,22 @@ async function calView(){
     const nume=m=>esc(m.nume)+' '+esc(m.prenume)+(m.stare==='fara_calendar'?'<br><small class="state">fără calendar</small>':m.stare==='nepartajat'?'<br><small class="state">nepartajat</small>':'');
     const bara=b=>{const l=pc(b.de),w=pc(b.pana)-l;return w<=0?'':`<div class="gr-b ${b.tip==='absent'?'abs':''}" style="left:${l}%;width:${Math.max(w,.8)}%" title="${esc(hm(b.de)+'–'+hm(b.pana)+(b.titlu?' '+b.titlu:''))}">${esc(b.titlu||'')}</div>`};
     return `<div class="gr"><div class="gr-r"><div class="gr-n"></div><div class="gr-t gr-h">${ore.join('')}</div></div>`+d.membri.map(m=>`<div class="gr-r"><div class="gr-n">${nume(m)}</div><div class="gr-t">${m.blocuri.map(bara).join('')}</div></div>`).join('')+`</div>`};
+  const ag=async()=>{const r=await api('/agenda?data='+$('#agD').value);
+    $('#agL').innerHTML=r.length?r.map(e=>`<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap"><span><b>${e.de}–${e.pana}</b> ${esc(e.titlu)}${e.privat?' 🔒':''}<br><small class="state">${e.intern?'adăugat în aplicație':'din '+esc(e.sursa||'calendar')}</small></span>${e.intern?`<span><button class="sec" data-ev="${e.id}">Șterge</button>${e.serie?` <button class="sec" data-es="${e.id}">Șterge seria</button>`:''}</span>`:''}</div>`).join(''):'<p class="state">Nicio programare în ziua asta.</p>'};
+  const agZi=n=>{const d=new Date($('#agD').value+'T12:00:00');d.setDate(d.getDate()+n);$('#agD').value=zi(d);ag()};
+  $('#agP').onclick=()=>agZi(-1);$('#agN').onclick=()=>agZi(1);$('#agD').onchange=ag;
+  $('#agRep').onchange=()=>{$('#agRw').hidden=!$('#agRep').value;if($('#agRep').value&&!$('#agRp').value){const d=new Date($('#agDt').value+'T12:00:00');d.setMonth(d.getMonth()+1);$('#agRp').value=zi(d)}};
+  $('#agL').onclick=async e=>{const d=e.target.dataset;try{
+    if(d.ev&&confirm('Ștergi programarea?'))await api('/evenimente/'+d.ev,{method:'DELETE'});
+    else if(d.es&&confirm('Ștergi toată seria de programări?'))await api('/evenimente/'+d.es+'?serie=1',{method:'DELETE'});
+    else return;
+    ag();incarca()}catch(x){alert(x.message)}};
+  $('#agB').onclick=async()=>{try{
+    const r=await post('/evenimente',{titlu:$('#agT').value,data:$('#agDt').value,de_la:$('#agDe').value,pana_la:$('#agPa').value,privat:$('#agPriv').checked?1:0,repeta:$('#agRep').value,repeta_pana:$('#agRp').value});
+    $('#agE').innerHTML='<span class="ok">'+(r.adaugate>1?r.adaugate+' programări adăugate.':'Programare adăugată.')+'</span>';$('#agT').value='';
+    $('#agD').value=$('#agDt').value;ag();incarca()}catch(x){$('#agE').textContent=x.message}};
+  $('#agViz').onchange=async()=>{try{await api('/calendar-intern',{method:'PUT',body:JSON.stringify({vizibil:$('#agViz').value})});incarca()}catch(x){alert(x.message)}};
+  api('/calendar-intern').then(r=>{$('#agViz').value=r.vizibil}).catch(()=>{});
   let gs=[];
   const incarca=async()=>{
     if(!gs.length){$('#gv').innerHTML='';$('#gi').textContent='Nu faci parte din niciun grup încă. Administratorul le creează din Admin.';return}
@@ -242,7 +270,7 @@ async function calView(){
       $('#ff').value=$('#fd1').value='';$('#ef1').textContent='';docs()
     }catch(x){$('#ef1').textContent=x.message}};
   gs=await api('/grupuri');$('#gr').innerHTML=gs.map(g=>`<option value="${g.id}">${esc(g.nume)}</option>`).join('');
-  cal();incarca();docs();
+  cal();incarca();docs();ag();
 }
 
 async function concView(){
