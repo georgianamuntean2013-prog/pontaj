@@ -114,6 +114,11 @@ def init():
          vizibil TEXT DEFAULT 'ocupat', ultima TEXT, eroare TEXT, nr INTEGER DEFAULT 0)""", write=True)
     q("CREATE TABLE IF NOT EXISTS evenimente(cal_id INTEGER, user_id INTEGER, inceput TEXT, sfarsit TEXT, titlu TEXT, privat INTEGER)", write=True)
     q("CREATE INDEX IF NOT EXISTS ev_user ON evenimente(user_id, inceput)", write=True)
+    for tabel, col in (("evenimente", "serie TEXT"), ("utilizatori", "viz_intern TEXT DEFAULT 'ocupat'")):
+        try:
+            q(f"ALTER TABLE {tabel} ADD COLUMN {col}", write=True)
+        except sqlite3.OperationalError:
+            pass
     q("CREATE TABLE IF NOT EXISTS grupuri(id INTEGER PRIMARY KEY, firma_id INTEGER, nume TEXT)", write=True)
     q("CREATE TABLE IF NOT EXISTS membri_grup(grup_id INTEGER, user_id INTEGER, PRIMARY KEY(grup_id,user_id))", write=True)
     q("""CREATE TABLE IF NOT EXISTS fisiere(id INTEGER PRIMARY KEY, grup_id INTEGER, user_id INTEGER, nume TEXT,
@@ -1346,6 +1351,111 @@ def grup_sterge(gid: int, a=Depends(admin)):
     return {"ok": True}
 
 
+class Programare(BaseModel):
+    titlu: str
+    data: str
+    de_la: str
+    pana_la: str
+    privat: int = 0
+    repeta: str = ""  # "", "zilnic" (zile lucratoare), "saptamanal"
+    repeta_pana: str = ""
+
+
+class VizIntern(BaseModel):
+    vizibil: str
+
+
+def _ora(t):
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t or ""):
+        raise HTTPException(422, "Ora nu e valida (ex. 14:30).")
+    return t
+
+
+@app.post("/api/evenimente")
+def programare_noua(b: Programare, u=Depends(me)):
+    titlu = b.titlu.strip()[:120]
+    if not titlu:
+        raise HTTPException(422, "Scrie un titlu.")
+    try:
+        d0 = date.fromisoformat(b.data)
+    except ValueError:
+        raise HTTPException(422, "Data nu este valida.")
+    de, pana = _ora(b.de_la), _ora(b.pana_la)
+    if pana <= de:
+        raise HTTPException(422, "Ora de final trebuie sa fie dupa ora de inceput.")
+    if b.repeta not in ("", "zilnic", "saptamanal"):
+        raise HTTPException(422, "Repetarea nu e valida.")
+    zile = [d0]
+    if b.repeta:
+        try:
+            sf = date.fromisoformat(b.repeta_pana)
+        except ValueError:
+            raise HTTPException(422, "Alege pana cand se repeta.")
+        if sf < d0 or (sf - d0).days > 400:
+            raise HTTPException(422, "Data de final a repetarii nu e valida (maxim 13 luni).")
+        zile, d = [], d0
+        while d <= sf:
+            if b.repeta == "saptamanal" and d.weekday() == d0.weekday() or b.repeta == "zilnic" and d.weekday() < 5:
+                zile.append(d)
+            d += timedelta(days=1)
+        if not zile:
+            raise HTTPException(422, "Intervalul ales nu contine nicio zi.")
+        if len(zile) > 120:
+            raise HTTPException(422, "Prea multe repetari. Alege un interval mai scurt.")
+    serie = secrets.token_hex(6) if len(zile) > 1 else None
+    for d in zile:
+        inc = datetime.fromisoformat(f"{d.isoformat()}T{de}:00").replace(tzinfo=TZ)
+        fin = datetime.fromisoformat(f"{d.isoformat()}T{pana}:00").replace(tzinfo=TZ)
+        q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie) VALUES(0,?,?,?,?,?,?)",
+          (u["id"], iso(inc), iso(fin), titlu, 1 if b.privat else 0, serie), write=True)
+    return {"adaugate": len(zile)}
+
+
+@app.delete("/api/evenimente/{rid}")
+def programare_sterge(rid: int, serie: int = 0, u=Depends(me)):
+    r = q("SELECT rowid AS id, serie FROM evenimente WHERE rowid=? AND user_id=? AND cal_id=0", (rid, u["id"]), one=True)
+    if not r:
+        raise HTTPException(404, "Programarea nu exista.")
+    if serie and r["serie"]:
+        q("DELETE FROM evenimente WHERE serie=? AND user_id=? AND cal_id=0", (r["serie"], u["id"]), write=True)
+    else:
+        q("DELETE FROM evenimente WHERE rowid=?", (rid,), write=True)
+    return {"ok": True}
+
+
+@app.get("/api/agenda")
+def agenda(data: str, u=Depends(me)):
+    try:
+        d = date.fromisoformat(data)
+    except ValueError:
+        raise HTTPException(422, "Data nu este valida.")
+    inc = datetime(d.year, d.month, d.day, tzinfo=TZ)
+    sf = inc + timedelta(days=1)
+    rez = []
+    for r in q("""SELECT e.rowid AS id, e.*, c.nume AS sursa FROM evenimente e LEFT JOIN calendare c ON c.id=e.cal_id
+                  WHERE e.user_id=? AND e.inceput<? AND e.sfarsit>? ORDER BY e.inceput""", (u["id"], iso(sf), iso(inc))):
+        a = datetime.fromisoformat(r["inceput"]).replace(tzinfo=timezone.utc).astimezone(TZ)
+        b = datetime.fromisoformat(r["sfarsit"]).replace(tzinfo=timezone.utc).astimezone(TZ)
+        rez.append({"id": r["id"], "titlu": r["titlu"], "de": a.strftime("%H:%M") if a >= inc else "00:00",
+                    "pana": b.strftime("%H:%M") if b <= sf else "24:00", "privat": r["privat"],
+                    "intern": r["cal_id"] == 0, "serie": bool(r["serie"]), "sursa": r["sursa"] or ""})
+    return rez
+
+
+@app.get("/api/calendar-intern")
+def viz_intern_citeste(u=Depends(me)):
+    r = q("SELECT COALESCE(viz_intern,'ocupat') AS v FROM utilizatori WHERE id=?", (u["id"],), one=True)
+    return {"vizibil": r["v"]}
+
+
+@app.put("/api/calendar-intern")
+def viz_intern_seteaza(b: VizIntern, u=Depends(me)):
+    if b.vizibil not in VIZIBIL:
+        raise HTTPException(422, "Alege ce vad colegii.")
+    q("UPDATE utilizatori SET viz_intern=? WHERE id=?", (b.vizibil, u["id"]), write=True)
+    return {"vizibil": b.vizibil}
+
+
 def blocuri_zi(uid, zi, viewer):
     """Ce vede 'viewer' din ziua 'zi' a lui 'uid', dupa alegerile lui uid. Intoarce (blocuri in minute, stare)."""
     d = date.fromisoformat(zi)
@@ -1354,6 +1464,9 @@ def blocuri_zi(uid, zi, viewer):
     mn = lambda dt: max(0, min(1440, int((dt.astimezone(TZ) - inc).total_seconds() // 60)))
     propriu = uid == viewer
     cals = {c["id"]: c["vizibil"] for c in q("SELECT id,vizibil FROM calendare WHERE user_id=?", (uid,))}
+    vi = q("SELECT COALESCE(viz_intern,'ocupat') AS v FROM utilizatori WHERE id=?", (uid,), one=True)["v"]
+    if q("SELECT 1 FROM evenimente WHERE user_id=? AND cal_id=0 LIMIT 1", (uid,), one=True):
+        cals[0] = vi  # programarile adaugate direct in aplicatie
     bl = []
     for r in q("SELECT * FROM evenimente WHERE user_id=? AND inceput<? AND sfarsit>?", (uid, iso(sf), iso(inc))):
         viz = "detalii" if propriu else cals.get(r["cal_id"], "ascuns")
