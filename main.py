@@ -115,7 +115,7 @@ def init():
     q("CREATE TABLE IF NOT EXISTS evenimente(cal_id INTEGER, user_id INTEGER, inceput TEXT, sfarsit TEXT, titlu TEXT, privat INTEGER)", write=True)
     q("CREATE INDEX IF NOT EXISTS ev_user ON evenimente(user_id, inceput)", write=True)
     for tabel, col in (("evenimente", "serie TEXT"), ("evenimente", "sedinta TEXT"), ("evenimente", "organizator INTEGER"),
-                       ("utilizatori", "viz_intern TEXT DEFAULT 'ocupat'")):
+                       ("utilizatori", "viz_intern TEXT DEFAULT 'ocupat'"), ("utilizatori", "hr INTEGER DEFAULT 0")):
         try:
             q(f"ALTER TABLE {tabel} ADD COLUMN {col}", write=True)
         except sqlite3.OperationalError:
@@ -174,6 +174,16 @@ def admin(u=Depends(me)):
     return u
 
 
+def hr(u=Depends(me)):  # administrator sau cont HR: cereri, pontaje, zile CO (fara conturi si setarile firmei)
+    if not (u["admin"] or u.get("hr")):
+        raise HTTPException(403, "Doar administratorul sau HR poate face asta.")
+    return u
+
+
+def drept_hr(u):
+    return bool(u["admin"] or u.get("hr"))
+
+
 def owner(u=Depends(me)):  # proprietarul aplicatiei, deasupra firmelor
     if not u["superadmin"]:
         raise HTTPException(403, "Doar proprietarul aplicatiei poate face asta.")
@@ -186,7 +196,7 @@ def acelasi(uid, firma):
 
 def profil(u):
     f = q("SELECT id,denumire,cui,adresa,contact FROM firme WHERE id=?", (firma_proprie(u),), one=True)
-    return {"nume": u["nume"], "prenume": u["prenume"], "admin": u["admin"], "id": u["id"],
+    return {"nume": u["nume"], "prenume": u["prenume"], "admin": u["admin"], "id": u["id"], "hr": u["hr"] or 0,
             "superadmin": u["superadmin"], "schimba": u["schimba_parola"], "firma": dict(f),
             "gdpr": 0 if acord_ok(u) else 1, "locatie": u["locatie"]}
 
@@ -319,9 +329,13 @@ def luna_rows(luna, user_id=None, firma=None):
 
 @app.get("/api/pontaje")
 def pontaje(luna: str, toti: int = 0, u=Depends(me)):
-    if toti and not u["admin"]:
-        raise HTTPException(403, "Doar administratorul poate vedea toti colegii.")
-    return randuri(luna, None if toti else u["id"], u["firma_id"])
+    if toti and not drept_hr(u):
+        raise HTTPException(403, "Doar administratorul sau HR poate vedea toti colegii.")
+    rez = randuri(luna, None if toti else u["id"], u["firma_id"])
+    if toti and not u["admin"]:  # locatia GPS o vede doar administratorul
+        for r in rez:
+            r.update(venire_lat=None, venire_lon=None, plecare_lat=None, plecare_lon=None, cere_loc=0)
+    return rez
 
 
 def _col(i):
@@ -423,17 +437,20 @@ def date_export(luna, firma):
 
 
 @app.get("/api/export-xlsx")
-def export_xlsx(luna: str, a=Depends(admin)):
+def export_xlsx(luna: str, a=Depends(hr)):
     if not re.fullmatch(r"\d{4}-\d{2}", luna):
         raise HTTPException(422, "Luna nu e valida.")
     antete = ["Nume", "Prenume", "Data", "Ziua", "Ora venire", "Ora plecare", "Pauză masă (min)", "Total ore lucrate", "Normă (ore)", "Diferență (ore)", "Locație venire", "Locație plecare"]
-    continut = xlsx(antete, date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15, 22, 22], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n", "m", "m"])
+    rand_, latimi, tipuri = date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15, 22, 22], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n", "m", "m"]
+    if not a["admin"]:  # HR primeste exportul fara coloanele de locatie
+        antete, rand_, latimi, tipuri = antete[:-2], [r[:-2] for r in rand_], latimi[:-2], tipuri[:-2]
+    continut = xlsx(antete, rand_, latimi, tipuri)
     return Response(continut, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename=pontaj-{luna}.xlsx"})
 
 
 @app.get("/api/export")
-def export(luna: str, a=Depends(admin)):
+def export(luna: str, a=Depends(hr)):
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")  # Excel in limba romana asteapta ; ca separator
     w.writerow(["Data", "Ora Venire", "Ora Plecare", "Pauza Masa", "Total Ore", "Nume", "Prenume", "Norma", "Diferenta"])
@@ -444,9 +461,15 @@ def export(luna: str, a=Depends(admin)):
                     headers={"Content-Disposition": f"attachment; filename=pontaj-{luna}.csv"})
 
 
+@app.get("/api/colegi")
+def colegi(a=Depends(hr)):
+    return [dict(r) for r in q("""SELECT id,nume,prenume,admin,COALESCE(hr,0) AS hr,COALESCE(activ,1) AS activ,COALESCE(functie,'') AS functie,
+        COALESCE(ore_zi,8) AS ore_zi FROM utilizatori WHERE firma_id=? ORDER BY nume""", (a["firma_id"],))]
+
+
 @app.get("/api/utilizatori")
 def utilizatori(a=Depends(admin)):
-    return [dict(r) for r in q("SELECT id,username,nume,prenume,admin,COALESCE(superadmin,0) AS superadmin,COALESCE(activ,1) AS activ,COALESCE(functie,'') AS functie,COALESCE(ore_zi,8) AS ore_zi, COALESCE(locatie,0) AS locatie, COALESCE((SELECT raspuns FROM acorduri WHERE user_id=utilizatori.id AND versiune=?),0) AS gdpr FROM utilizatori WHERE firma_id=? ORDER BY nume", (gdpr_info(a["firma_id"])["versiune"], a["firma_id"]))]
+    return [dict(r) for r in q("SELECT id,username,nume,prenume,admin,COALESCE(hr,0) AS hr,COALESCE(superadmin,0) AS superadmin,COALESCE(activ,1) AS activ,COALESCE(functie,'') AS functie,COALESCE(ore_zi,8) AS ore_zi, COALESCE(locatie,0) AS locatie, COALESCE((SELECT raspuns FROM acorduri WHERE user_id=utilizatori.id AND versiune=?),0) AS gdpr FROM utilizatori WHERE firma_id=? ORDER BY nume", (gdpr_info(a["firma_id"])["versiune"], a["firma_id"]))]
 
 
 @app.post("/api/utilizatori")
@@ -474,6 +497,16 @@ def activ(uid: int, val: int, a=Depends(admin)):
     q("UPDATE utilizatori SET activ=? WHERE id=?", (1 if val else 0, uid), write=True)
     if not val:
         q("DELETE FROM sesiuni WHERE user_id=?", (uid,), write=True)  # il deconecteaza imediat
+    return {"ok": True}
+
+
+@app.post("/api/utilizatori/{uid}/hr/{val}")
+def seteaza_hr(uid: int, val: int, a=Depends(admin)):
+    if uid == a["id"]:
+        raise HTTPException(422, "Nu iti poti schimba propriile drepturi.")
+    if not acelasi(uid, a["firma_id"]):
+        raise HTTPException(404, "Colegul nu exista.")
+    q("UPDATE utilizatori SET hr=? WHERE id=?", (1 if val else 0, uid), write=True)
     return {"ok": True}
 
 
@@ -524,8 +557,8 @@ def cere_concediu(b: Concediu, u=Depends(me)):
 
 @app.get("/api/concedii")
 def concedii(toti: int = 0, u=Depends(me)):
-    if toti and not u["admin"]:
-        raise HTTPException(403, "Doar administratorul poate vedea toate cererile.")
+    if toti and not drept_hr(u):
+        raise HTTPException(403, "Doar administratorul sau HR poate vedea toate cererile.")
     sql = "SELECT c.*, u.nume, u.prenume FROM concedii c JOIN utilizatori u ON u.id=c.user_id"
     rows = q(sql + (" WHERE u.firma_id=?" if toti else " WHERE c.user_id=?") + " ORDER BY c.de_la DESC",
              (u["firma_id"],) if toti else (u["id"],))
@@ -535,16 +568,16 @@ def concedii(toti: int = 0, u=Depends(me)):
 @app.delete("/api/concedii/{cid}")
 def anuleaza(cid: int, u=Depends(me)):
     c = q("SELECT * FROM concedii WHERE id=?", (cid,), one=True)
-    if not c or (c["user_id"] != u["id"] and not (u["admin"] and acelasi(c["user_id"], u["firma_id"]))):
+    if not c or (c["user_id"] != u["id"] and not (drept_hr(u) and acelasi(c["user_id"], u["firma_id"]))):
         raise HTTPException(404, "Cererea nu exista.")
-    if not u["admin"] and c["status"] != "in asteptare":
+    if not drept_hr(u) and c["status"] != "in asteptare":
         raise HTTPException(403, "Cererea e deja procesata. Cere administratorului sa o anuleze.")
     q("DELETE FROM concedii WHERE id=?", (cid,), write=True)
     return {"ok": True}
 
 
 @app.post("/api/concedii/{cid}/{status}")
-def decide(cid: int, status: str, a=Depends(admin)):
+def decide(cid: int, status: str, a=Depends(hr)):
     if status not in ("aprobat", "respins"):
         raise HTTPException(422, "Status invalid.")
     q("UPDATE concedii SET status=? WHERE id=? AND user_id IN (SELECT id FROM utilizatori WHERE firma_id=?)",
@@ -617,8 +650,8 @@ def sold(uid):
 
 @app.get("/api/zile-co")
 def zile_co(user_id: int = 0, u=Depends(me)):
-    if user_id and user_id != u["id"] and not u["admin"]:
-        raise HTTPException(403, "Doar administratorul poate vedea soldul altui coleg.")
+    if user_id and user_id != u["id"] and not drept_hr(u):
+        raise HTTPException(403, "Doar administratorul sau HR poate vedea soldul altui coleg.")
     if user_id and user_id != u["id"] and not acelasi(user_id, u["firma_id"]):
         raise HTTPException(404, "Colegul nu exista.")
     return sold(user_id or u["id"])
@@ -632,7 +665,7 @@ class SetariCO(BaseModel):
 
 
 @app.put("/api/zile-co/setari")
-def setari_co(b: SetariCO, a=Depends(admin)):
+def setari_co(b: SetariCO, a=Depends(hr)):
     if not acelasi(b.user_id, a["firma_id"]):
         raise HTTPException(404, "Colegul nu exista.")
     if not 0 <= b.co_an <= 60 or not 0 <= b.reportate <= 60:
@@ -651,7 +684,7 @@ def setari_co(b: SetariCO, a=Depends(admin)):
 
 
 @app.put("/api/zile-co")
-def seteaza_zile(b: Zile, a=Depends(admin)):
+def seteaza_zile(b: Zile, a=Depends(hr)):
     if not acelasi(b.user_id, a["firma_id"]):
         raise HTTPException(404, "Colegul nu exista.")
     q("""INSERT INTO zile_co(user_id,an,zile) VALUES(?,?,?)
@@ -884,8 +917,8 @@ def rezumat(uid, luna):
 def rezumat_luna(luna: str, toti: int = 0, u=Depends(me)):
     if not toti:
         return rezumat(u["id"], luna)
-    if not u["admin"]:
-        raise HTTPException(403, "Doar administratorul poate vedea toti colegii.")
+    if not drept_hr(u):
+        raise HTTPException(403, "Doar administratorul sau HR poate vedea toti colegii.")
     return [{**dict(x), **rezumat(x["id"], luna)}
             for x in q("SELECT id,nume,prenume FROM utilizatori WHERE COALESCE(activ,1)=1 AND firma_id=? ORDER BY nume", (u["firma_id"],))]
 
@@ -1130,8 +1163,8 @@ def cere_corectie(b: Corectie, u=Depends(me)):
 
 @app.get("/api/corectii")
 def corectii(toti: int = 0, u=Depends(me)):
-    if toti and not u["admin"]:
-        raise HTTPException(403, "Doar administratorul poate vedea cererile colegilor.")
+    if toti and not drept_hr(u):
+        raise HTTPException(403, "Doar administratorul sau HR poate vedea cererile colegilor.")
     sql = """SELECT c.*, x.nume, x.prenume, p.ora_venire AS actual_venire, p.ora_plecare AS actual_plecare
              FROM corectii c JOIN utilizatori x ON x.id=c.user_id
              LEFT JOIN pontaje p ON p.user_id=c.user_id AND p.data=c.data"""
@@ -1147,7 +1180,7 @@ def anuleaza_corectie(cid: int, u=Depends(me)):
 
 
 @app.post("/api/corectii/{cid}/{status}")
-def decide_corectie(cid: int, status: str, a=Depends(admin)):
+def decide_corectie(cid: int, status: str, a=Depends(hr)):
     if status not in ("aprobat", "respins"):
         raise HTTPException(422, "Status invalid.")
     c = q("SELECT * FROM corectii WHERE id=? AND status='in asteptare'", (cid,), one=True)
