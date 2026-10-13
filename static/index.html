@@ -91,11 +91,12 @@ function render(){
   if(S.gdpr){nav.hidden=true;return gdprView()}
   const tabs=S.ctx?[['ech','Echipă'],['adm','Admin']]:[['azi','Azi'],['luna','Luna'],['conc','Concedii'],['cal','Calendar']];
   if(S.admin&&!S.ctx)tabs.push(['ech','Echipă'],['adm','Admin']);
+  else if(S.hr&&!S.admin&&!S.ctx)tabs.push(['ech','Echipă'],['hr','HR']);
   if(S.ctx&&!['ech','adm'].includes(tab))tab='ech';
   nav.hidden=false;
   nav.innerHTML=tabs.map(([k,t])=>`<button class="${k===tab?'on':''}" data-t="${k}">${t}</button>`).join('');
   nav.onclick=e=>{if(e.target.dataset.t){tab=e.target.dataset.t;render()}};
-  ({azi:aziView,luna:lunaView,conc:concView,cal:calView,ech:echView,adm:admView})[tab]();
+  ({azi:aziView,luna:lunaView,conc:concView,cal:calView,ech:echView,adm:admView,hr:hrView})[tab]();
 }
 
 function parolaView(){
@@ -153,7 +154,7 @@ async function aziView(){
   clock();tick=setInterval(clock,10000);
   try{show((await api('/pontaje?luna='+ym(now))).find(r=>r.data===zi))}catch(x){$('#e').textContent=x.message}
   api('/zile-co').then(s=>$('#co').innerHTML=soldHtml(s)).catch(()=>{});
-  api('/eu').then(p=>{if(p.locatie!==S.locatie){S.locatie=p.locatie;localStorage.setItem('pontaj',JSON.stringify(S))}}).catch(()=>{});
+  api('/eu').then(p=>{if(p.locatie!==S.locatie||(p.hr||0)!==(S.hr||0)||p.admin!==S.admin){const sch=(p.hr||0)!==(S.hr||0)||p.admin!==S.admin;S.locatie=p.locatie;S.hr=p.hr;S.admin=p.admin;localStorage.setItem('pontaj',JSON.stringify(S));if(sch)render()}}).catch(()=>{});
   notificari();
   const act=(p,b,m)=>async()=>{try{show(await (b?api(p,b):post(p)));$('#e').textContent='';}catch(x){$('#e').textContent=x.message}};
   const cuLoc=p=>async()=>{try{let b=null,nota='';
@@ -294,7 +295,7 @@ async function echView(){
   app.innerHTML=`<h1>Echipă</h1><div class="card" id="lst"></div>
   <div class="card"><input type="month" id="m" value="${ym(new Date())}"><button class="sec" id="x" style="width:100%">Descarcă Excel (.xlsx)</button><p class="state" id="xm"></p><div class="wrap" id="rzz" style="margin-top:12px"></div><div class="wrap" id="t" style="margin-top:12px"></div></div>`;
   const pin=(t,a,o,ora,cere)=>a!=null?`<a href="https://www.google.com/maps?q=${a},${o}" target="_blank" rel="noopener">📍${t}</a> `:(cere&&ora?`<span class="state">⚠${t}</span> `:'');
-  const us=await api('/utilizatori'),ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
+  const us=await api('/colegi'),ore=x=>`${x.ore_zi} ${x.ore_zi==1?'oră':'ore'}/zi`;
   const rand=x=>`<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.nume)} ${esc(x.prenume)}</b><br><small class="state">${esc(x.functie||'—')}</small></span><span class="tag">${ore(x)}</span></div>`;
   const ac=us.filter(x=>x.activ),fo=us.filter(x=>!x.activ);
   $('#lst').innerHTML=`<b>Colegi (${ac.length})</b>`+ac.map(rand).join('')+(fo.length?`<p class="state" style="margin-top:12px">Foști colegi</p>`+fo.map(rand).join(''):'');
@@ -308,6 +309,26 @@ async function echView(){
     const f=(S.ctx&&S.ctxF?S.ctxF:S.firma).denumire.replace(/[^\w-]+/g,'_'),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='pontaj-'+f+'-'+L+'.xlsx';document.body.appendChild(a);a.click();a.remove();
     $('#xm').textContent='Fișierul „'+a.download+'” a fost descărcat. Îl găsești în folderul Descărcări și se deschide direct în Excel.'}catch(e2){$('#xm').textContent=e2.message}};
   load();
+}
+
+async function hrView(){
+  app.innerHTML=`<h1>HR</h1>
+  <div class="card"><b>Cereri de concediu</b><div id="c"></div></div>
+  <div class="card"><b>Corecții de pontaj</b><div id="ct"></div></div>
+  <div class="card"><b>Zile CO</b><label>Coleg</label><select id="zu"></select><div id="zs" style="margin-bottom:12px"></div><label>Zile CO pe an (legal 21 = 1,75 pe lună)</label><input id="zz" type="number" step="0.5" min="0" max="60"><label>Data angajării (dacă a început în acest an)</label><input id="zd" type="date"><label>Zile reportate din anul trecut</label><input id="zr" type="number" step="0.5" min="0" max="60"><p class="err" id="ez"></p><button style="width:100%" id="zb">Salvează</button></div>
+  `;
+  const us=await api('/colegi');
+  $('#zu').innerHTML=us.filter(x=>x.activ).map(x=>`<option value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</option>`).join('');
+  const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s.setari.co_an;$('#zd').value=s.setari.data_ang;$('#zr').value=s.setari.reportate};
+  const conc=async()=>{const azi=new Date().toISOString().slice(0,10),r=(await api('/concedii?toti=1')).filter(c=>c.status==='in asteptare'||(c.status==='aprobat'&&c.pana_la>=azi));
+    $('#c').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)}<br><small class="state">${perioada(c)} · ${esc(c.tip)} · ${esc(c.status)}</small></span><span>${c.status==='aprobat'?'':`<button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button> `}<button class="sec" data-x="${c.id}">Anulează</button></span></div>`).join(''):'<p class="state">Nicio cerere activă.</p>'};
+  $('#c').onclick=async e=>{const d=e.target.dataset;if(d.i)await post(`/concedii/${d.i}/${d.s}`);else if(d.x&&confirm('Anulezi cererea? Zilele revin în sold.'))await api('/concedii/'+d.x,{method:'DELETE'});else return;conc();zl()};
+  $('#zu').onchange=zl;
+  $('#zb').onclick=async()=>{try{const s=await api('/zile-co/setari',{method:'PUT',body:JSON.stringify({user_id:+$('#zu').value,co_an:+$('#zz').value||0,data_ang:$('#zd').value,reportate:+$('#zr').value||0})});$('#zs').innerHTML=soldHtml(s);$('#ez').innerHTML='<span class="ok">Salvat.</span>'}catch(x){$('#ez').textContent=x.message}};
+  const ct=async()=>{const r=(await api('/corectii?toti=1')).filter(c=>c.status==='in asteptare');
+    $('#ct').innerHTML=r.length?r.map(c=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(c.nume)} ${esc(c.prenume)} · ${c.data.slice(8)}.${c.data.slice(5,7)}<br><small class="state">acum: ${c.actual_venire||'—'} → ${c.actual_plecare||'—'}<br>cerut: ${c.ora_venire||'—'} → ${c.ora_plecare||'—'}<br>${esc(c.motiv)}</small></span><span><button class="sec" data-i="${c.id}" data-s="aprobat">Aprobă</button> <button class="sec" data-i="${c.id}" data-s="respins">Respinge</button></span></div>`).join(''):'<p class="state">Nicio cerere în așteptare.</p>'};
+  $('#ct').onclick=async e=>{const d=e.target.dataset;if(d.i){try{await post(`/corectii/${d.i}/${d.s}`);ct()}catch(x){alert(x.message)}}};
+  conc();ct();zl();
 }
 
 async function admView(){
@@ -336,7 +357,7 @@ async function admView(){
     $('#ic').onclick=async()=>{try{await navigator.clipboard.writeText(t)}catch(_){$('#it').select();document.execCommand('copy')}$('#ic').textContent='Copiat ✓'};
     if($('#is'))$('#is').onclick=()=>navigator.share({text:t}).catch(()=>{});
     $('#inv').scrollIntoView({behavior:'smooth'})};
-  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.admin?' <span class="tag">admin</span>':''}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button> <button class="sec" data-l="${x.id}">Trimite link</button>${x.id===S.id||x.superadmin?'':` <button class="sec" data-r="${x.id}">Resetează parola</button>`}${x.id===S.id||x.superadmin?'':` <button class="sec" data-g="${x.id}" data-v="${x.admin?0:1}">${x.admin?'Scoate admin':'Fă admin'}</button> <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
+  const cl=()=>{$('#cl').innerHTML=us.map(x=>`<div class="row" style="padding:8px 0;flex-wrap:wrap"><span>${esc(x.nume)} ${esc(x.prenume)}${x.admin?' <span class="tag">admin</span>':''}${x.hr&&!x.admin?' <span class="tag">HR</span>':''}${x.activ?'':' <span class="tag">dezactivat</span>'}<br><small class="state">${esc(x.functie||'—')} · ${ore(x)} · ${esc(x.username)} · ${x.gdpr?'informare confirmată':'informare neconfirmată'}${x.locatie?' · cere locația':''}</small></span><span><button class="sec" data-m="${x.id}">Modifică</button> <button class="sec" data-l="${x.id}">Trimite link</button>${x.id===S.id||x.superadmin?'':` <button class="sec" data-r="${x.id}">Resetează parola</button>`}${x.id===S.id||x.superadmin||x.admin?'':` <button class="sec" data-h="${x.id}" data-v="${x.hr?0:1}">${x.hr?'Scoate HR':'Fă HR'}</button>`}${x.id===S.id||x.superadmin?'':` <button class="sec" data-g="${x.id}" data-v="${x.admin?0:1}">${x.admin?'Scoate admin':'Fă admin'}</button> <button class="sec" data-a="${x.id}" data-v="${x.activ?0:1}">${x.activ?'Dezactivează':'Reactivează'}</button>`}</span></div>`).join('')};
   const fillZ=()=>{const o=us.filter(x=>x.activ).map(x=>`<option value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</option>`).join('');$('#zu').innerHTML=o;$('#du').innerHTML=o};
   const zl=async()=>{const s=await api('/zile-co?user_id='+$('#zu').value);$('#zs').innerHTML=soldHtml(s);$('#zz').value=s.setari.co_an;$('#zd').value=s.setari.data_ang;$('#zr').value=s.setari.reportate};
   const form=x=>{edit=x||null;$('#ft').textContent=x?'Modifică coleg':'Coleg nou';
@@ -348,6 +369,7 @@ async function admView(){
     if(d.r){const x=us.find(y=>y.id==d.r);if(!confirm(`Resetezi parola pentru ${x.nume} ${x.prenume}? Va fi deconectat și va primi o parolă nouă.`))return;
       try{const r=await post(`/utilizatori/${d.r}/reset-parola`);invita(x.username,r.parola,x.prenume||x.nume,true)}catch(e2){alert(e2.message)}return}
     if(d.l){const x=us.find(y=>y.id==d.l);invita(x.username,'',x.prenume||x.nume);return}
+    if(d.h){try{await post(`/utilizatori/${d.h}/hr/${d.v}`);us.find(x=>x.id==d.h).hr=+d.v;cl()}catch(x){alert(x.message)}return}
     if(d.g){try{await post(`/utilizatori/${d.g}/admin/${d.v}`);us.find(x=>x.id==d.g).admin=+d.v;cl()}catch(x){alert(x.message)}return}
     if(d.a&&(d.v==='1'||confirm('Dezactivezi contul? Istoricul pontajelor rămâne.'))){try{await post(`/utilizatori/${d.a}/activ/${d.v}`);us.find(x=>x.id==d.a).activ=+d.v;cl();fillZ();zl()}catch(x){alert(x.message)}}};
   $('#cn').onclick=()=>form(null);
