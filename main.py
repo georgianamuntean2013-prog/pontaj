@@ -808,6 +808,22 @@ def push_cheie(_=Depends(me)):
     return {"cheie": vapid()[1]}
 
 
+class Iesire(BaseModel):
+    endpoint: str = ""
+
+
+@app.post("/api/logout")
+def logout(b: Iesire | None = None, authorization: str = Header(default="")):
+    """Inchide sesiunea de pe acest dispozitiv. Nu cere parola schimbata sau GDPR: oricine trebuie sa poata iesi."""
+    tok = authorization.removeprefix("Bearer ").strip()
+    r = q("SELECT user_id FROM sesiuni WHERE token=?", (tok,), one=True)
+    if r:
+        if b and b.endpoint:  # dispozitivul nu mai primeste notificarile acestui cont
+            q("DELETE FROM push_abonari WHERE endpoint=? AND user_id=?", (b.endpoint, r["user_id"]), write=True)
+        q("DELETE FROM sesiuni WHERE token=?", (tok,), write=True)
+    return {"ok": True}
+
+
 @app.post("/api/push/abonare")
 def push_abonare(b: Abonare, u=Depends(me)):
     q("""INSERT INTO push_abonari VALUES(?,?,?,?) ON CONFLICT(endpoint)
