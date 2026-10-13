@@ -189,6 +189,7 @@ async function calView(){
   <label>Data</label><input type="date" id="agDt" value="${zi(new Date())}">
   <div class="row" style="gap:8px"><div style="flex:1"><label>De la</label><input type="time" id="agDe" value="10:00"></div><div style="flex:1"><label>Până la</label><input type="time" id="agPa" value="11:00"></div></div>
   <label style="display:flex;align-items:center;gap:8px;margin:4px 0 12px"><input type="checkbox" id="agPriv" style="width:auto;margin:0">Privat (colegii nu văd titlul)</label>
+  <div id="agPw" hidden><label>Participanți (bifează cine vine)</label><div id="agPl" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px"></div><button class="sec" type="button" id="agPt" style="margin:6px 0 12px">Bifează toți / niciunul</button></div>
   <label>Repetare</label><select id="agRep"><option value="">Nu se repetă</option><option value="zilnic">În fiecare zi lucrătoare</option><option value="saptamanal">În fiecare săptămână</option></select>
   <div id="agRw" hidden><label>Se repetă până la</label><input type="date" id="agRp"></div>
   <p class="err" id="agE"></p><button style="width:100%" id="agB">Adaugă programarea</button>
@@ -211,20 +212,27 @@ async function calView(){
     const bara=b=>{const l=pc(b.de),w=pc(b.pana)-l;return w<=0?'':`<div class="gr-b ${b.tip==='absent'?'abs':''}" style="left:${l}%;width:${Math.max(w,.8)}%" title="${esc(hm(b.de)+'–'+hm(b.pana)+(b.titlu?' '+b.titlu:''))}">${esc(b.titlu||'')}</div>`};
     return `<div class="gr"><div class="gr-r"><div class="gr-n"></div><div class="gr-t gr-h">${ore.join('')}</div></div>`+d.membri.map(m=>`<div class="gr-r"><div class="gr-n">${nume(m)}</div><div class="gr-t">${m.blocuri.map(bara).join('')}</div></div>`).join('')+`</div>`};
   const ag=async()=>{const r=await api('/agenda?data='+$('#agD').value);
-    $('#agL').innerHTML=r.length?r.map(e=>`<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap"><span><b>${e.de}–${e.pana}</b> ${esc(e.titlu)}${e.privat?' 🔒':''}<br><small class="state">${e.intern?'adăugat în aplicație':'din '+esc(e.sursa||'calendar')}</small></span>${e.intern?`<span><button class="sec" data-ev="${e.id}">Șterge</button>${e.serie?` <button class="sec" data-es="${e.id}">Șterge seria</button>`:''}</span>`:''}</div>`).join(''):'<p class="state">Nicio programare în ziua asta.</p>'};
+    $('#agL').innerHTML=r.length?r.map(e=>{const s=e.sedinta;
+      const info=s?`Ședință · ${s.eu_org?'organizată de tine':'organizator: '+esc(s.organizator)}<br>Participă: ${s.participanti.map(esc).join(', ')}`:(e.intern?'adăugat în aplicație':'din '+esc(e.sursa||'calendar'));
+      const btn=e.intern?`<span><button class="sec" data-ev="${e.id}" data-sd="${s?(s.eu_org?'org':'part'):''}">${s?(s.eu_org?'Șterge pentru toți':'Nu particip'):'Șterge'}</button>${e.serie?` <button class="sec" data-es="${e.id}" data-sd="${s?(s.eu_org?'org':'part'):''}">${s?(s.eu_org?'Șterge seria':'Nu particip la serie'):'Șterge seria'}</button>`:''}</span>`:'';
+      return `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap"><span><b>${e.de}–${e.pana}</b> ${esc(e.titlu)}${e.privat?' 🔒':''}<br><small class="state">${info}</small></span>${btn}</div>`}).join(''):'<p class="state">Nicio programare în ziua asta.</p>'};
   const agZi=n=>{const d=new Date($('#agD').value+'T12:00:00');d.setDate(d.getDate()+n);$('#agD').value=zi(d);ag()};
   $('#agP').onclick=()=>agZi(-1);$('#agN').onclick=()=>agZi(1);$('#agD').onchange=ag;
   $('#agRep').onchange=()=>{$('#agRw').hidden=!$('#agRep').value;if($('#agRep').value&&!$('#agRp').value){const d=new Date($('#agDt').value+'T12:00:00');d.setMonth(d.getMonth()+1);$('#agRp').value=zi(d)}};
   $('#agL').onclick=async e=>{const d=e.target.dataset;try{
-    if(d.ev&&confirm('Ștergi programarea?'))await api('/evenimente/'+d.ev,{method:'DELETE'});
-    else if(d.es&&confirm('Ștergi toată seria de programări?'))await api('/evenimente/'+d.es+'?serie=1',{method:'DELETE'});
+    const org=d.sd==='org',part=d.sd==='part';
+    if(d.ev&&confirm(org?'Ștergi ședința pentru toți participanții?':part?'Te scoți din ședință? Rămâne pentru ceilalți.':'Ștergi programarea?'))await api('/evenimente/'+d.ev,{method:'DELETE'});
+    else if(d.es&&confirm(org?'Ștergi toată seria pentru toți participanții?':part?'Te scoți din toată seria?':'Ștergi toată seria de programări?'))await api('/evenimente/'+d.es+'?serie=1',{method:'DELETE'});
     else return;
     ag();incarca()}catch(x){alert(x.message)}};
   $('#agB').onclick=async()=>{try{
-    const r=await post('/evenimente',{titlu:$('#agT').value,data:$('#agDt').value,de_la:$('#agDe').value,pana_la:$('#agPa').value,privat:$('#agPriv').checked?1:0,repeta:$('#agRep').value,repeta_pana:$('#agRp').value});
-    $('#agE').innerHTML='<span class="ok">'+(r.adaugate>1?r.adaugate+' programări adăugate.':'Programare adăugată.')+'</span>';$('#agT').value='';
+    const r=await post('/evenimente',{titlu:$('#agT').value,data:$('#agDt').value,de_la:$('#agDe').value,pana_la:$('#agPa').value,privat:$('#agPriv').checked?1:0,repeta:$('#agRep').value,repeta_pana:$('#agRp').value,participanti:[...document.querySelectorAll('#agPl input:checked')].map(i=>+i.value)});
+    $('#agE').innerHTML='<span class="ok">'+(r.invitati?`Ședință adăugată pentru ${r.invitati+1} persoane`+(r.adaugate>1?` (${r.adaugate} zile)`:'')+'. Invitații au primit notificare.':(r.adaugate>1?r.adaugate+' programări adăugate.':'Programare adăugată.'))+'</span>'+(r.ocupati&&r.ocupati.length?`<br><span class="err">Atenție: ${r.ocupati.map(esc).join(', ')} au altceva în calendar la ora aceea.</span>`:'');$('#agT').value='';document.querySelectorAll('#agPl input').forEach(i=>i.checked=false);
     $('#agD').value=$('#agDt').value;ag();incarca()}catch(x){$('#agE').textContent=x.message}};
   $('#agViz').onchange=async()=>{try{await api('/calendar-intern',{method:'PUT',body:JSON.stringify({vizibil:$('#agViz').value})});incarca()}catch(x){alert(x.message)}};
+  api('/invitabili').then(l=>{if(!l.length)return;$('#agPw').hidden=false;$('#agPl').innerHTML=l.map(x=>`<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" style="width:auto;margin:0" value="${x.id}">${esc(x.nume)} ${esc(x.prenume)}</label>`).join('');
+    $('#agPt').onclick=()=>{const c=[...document.querySelectorAll('#agPl input')],tot=c.every(i=>i.checked);c.forEach(i=>i.checked=!tot)};
+    $('#agPl').onchange=()=>{const n=document.querySelectorAll('#agPl input:checked').length;$('#agPriv').disabled=!!n;if(n)$('#agPriv').checked=false}}).catch(()=>{});
   api('/calendar-intern').then(r=>{$('#agViz').value=r.vizibil}).catch(()=>{});
   let gs=[];
   const incarca=async()=>{
