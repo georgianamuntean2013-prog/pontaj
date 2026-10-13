@@ -79,10 +79,18 @@ function antet(){const h=$('#hd');
   if(!S||!S.firma){h.hidden=true;return}
   const f=S.ctx&&S.ctxF?S.ctxF:S.firma;h.hidden=false;
   h.innerHTML=`<b>${esc(f.denumire)}</b><small>${[f.cui&&'CUI '+esc(f.cui),esc(f.adresa),esc(f.contact)].filter(Boolean).join(' · ')}</small>`;
+  h.insertAdjacentHTML('beforeend','<div><button class="sec" id="iesi" style="width:auto;display:inline-block;margin-top:6px;padding:4px 14px;font-size:.85rem">Ieși din cont</button></div>');
+  $('#iesi').onclick=iesire;
   if(S.superadmin){
     if(!S.firme){api('/firme').then(l=>{S.firme=l;render()}).catch(()=>{});return}
     if(S.firme.length>1){h.insertAdjacentHTML('beforeend',`<label style="display:block;margin-top:6px"><small>Administrezi firma:</small> <select id="cx">${S.firme.map(x=>`<option value="${x.id}" ${x.id===(S.ctx||S.firma.id)?'selected':''}>${esc(x.denumire)}${x.id===S.firma.id?' (a ta)':''}</option>`).join('')}</select></label>`);
       $('#cx').onchange=e=>{const id=+e.target.value;S.ctx=id===S.firma.id?0:id;S.ctxF=S.ctx?S.firme.find(x=>x.id===id):null;tab=S.ctx?'ech':'azi';localStorage.setItem('pontaj',JSON.stringify(S));render()}}}}
+
+async function iesire(){
+  if(!confirm('Te deconectezi de pe acest dispozitiv?'))return;
+  let ep='';try{const r=await navigator.serviceWorker.getRegistration();const sb=r&&await r.pushManager.getSubscription();ep=sb?sb.endpoint:''}catch(_){}
+  try{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+S.token},body:JSON.stringify({endpoint:ep})})}catch(_){}
+  S=null;tab='azi';try{localStorage.removeItem('pontaj')}catch(_){}render()}
 
 function render(){
   clearInterval(tick);antet();
