@@ -288,7 +288,10 @@ def venire(b: Loc | None = None, u=Depends(me)):
     zi = now.strftime("%Y-%m-%d")
     r = q("SELECT * FROM pontaje WHERE user_id=? AND data=?", (u["id"], zi), one=True)
     if not r:  # ora de venire nu se suprascrie niciodata
-        q("INSERT INTO pontaje(user_id,data,ora_venire,pauza_min,venire_lat,venire_lon,venire_prec) VALUES(?,?,?,?,?,?,?)", (u["id"], zi, now.strftime("%H:%M"), 30 if (u["ore_zi"] or 8) > 6 else 0, *loc_valida(b, u)), write=True)
+        # pauza se tine minte: se foloseste ultima pauza aleasa de utilizator (altfel 30 min)
+        ult = q("SELECT pauza_min FROM pontaje WHERE user_id=? AND data<? AND ora_venire IS NOT NULL AND corectat IS NOT 1 ORDER BY data DESC LIMIT 1", (u["id"], zi), one=True)
+        pz = ult["pauza_min"] if ult and ult["pauza_min"] is not None else (30 if (u["ore_zi"] or 8) > 6 else 0)
+        q("INSERT INTO pontaje(user_id,data,ora_venire,pauza_min,venire_lat,venire_lon,venire_prec) VALUES(?,?,?,?,?,?,?)", (u["id"], zi, now.strftime("%H:%M"), pz, *loc_valida(b, u)), write=True)
     return out(q("SELECT * FROM pontaje WHERE user_id=? AND data=?", (u["id"], zi), one=True))
 
 
