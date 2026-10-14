@@ -44,7 +44,7 @@ nav button.on{color:var(--acc);box-shadow:inset 0 3px 0 var(--acc)}
 .row{display:flex;gap:8px;align-items:center;justify-content:space-between}
 .tag{font-size:.8rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
 header#hd{background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;text-align:center}header#hd b{display:block}header#hd small{color:var(--mut)}
-.gr{min-width:640px}.gr-r{display:flex;align-items:center;border-bottom:1px solid var(--line)}.gr-n{width:112px;flex:none;font-size:.85rem;padding:6px 4px}.gr-t{position:relative;flex:1;height:34px;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/13 - 1px),var(--line) calc(100%/13 - 1px),var(--line) calc(100%/13))}.gr-t.gr-h{height:auto;background:none;display:flex}.gr-h span{flex:1;font-size:.7rem;color:var(--mut)}.gr-b{position:absolute;top:4px;bottom:4px;border-radius:4px;background:var(--acc);color:#fff;font-size:.7rem;overflow:hidden;white-space:nowrap;padding:0 4px;line-height:26px}.gr-b.abs{background:var(--stop)}
+.gr{min-width:640px}.gr-r{display:flex;align-items:center;border-bottom:1px solid var(--line)}.gr-n{width:112px;flex:none;font-size:.85rem;padding:6px 4px}.gr-t{position:relative;flex:1;height:34px;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/var(--n,13) - 1px),var(--line) calc(100%/var(--n,13) - 1px),var(--line) calc(100%/var(--n,13)))}.gr-t.gr-h{height:1.1rem;background:none}.gr-h span{position:absolute;transform:translateX(-50%);font-size:.7rem;color:var(--mut)}.gr-h span:first-child{transform:none}.gr-b{position:absolute;top:4px;bottom:4px;border-radius:4px;background:var(--acc);color:#fff;font-size:.7rem;overflow:hidden;white-space:nowrap;padding:0 4px;line-height:26px}.gr-b.abs{background:var(--stop)}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -210,7 +210,7 @@ async function calView(){
   <label style="margin-top:16px">Ce văd colegii din grup din programările mele</label><select id="agViz"><option value="ocupat">Doar „ocupat”, fără titlu</option><option value="detalii">Titlul (cele private rămân ascunse)</option><option value="ascuns">Nu le arăta</option></select></details></div>
   <div class="card"><b>Cine ce face</b><select id="gr"></select>
   <div class="row" style="margin-bottom:8px"><button class="sec" id="zp">◀</button><input type="date" id="zd" value="${zi(new Date())}" style="margin:0"><button class="sec" id="zn">▶</button></div>
-  <div class="wrap" id="gv"></div><p class="state" id="gi"></p></div>
+  <div class="wrap" id="gv"></div><p class="state" id="gi"></p><button class="sec" id="gt" style="width:100%"></button></div>
   <div class="card"><b>Documente și notă comună</b><p class="state">Le văd doar membrii grupului ales mai sus. Nu încărca acte de identitate sau documente medicale.</p>
   <label>Notă comună</label><textarea id="nt1" rows="6" style="width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:inherit;color:inherit"></textarea><small class="state" id="ni"></small><p class="err" id="en1"></p>
   <div class="row"><button class="sec" id="ns" style="flex:1">Salvează nota</button><button class="sec" id="nr">Reîncarcă</button></div>
@@ -220,11 +220,13 @@ async function calView(){
   <div class="card"><b>Calendarele mele</b><div id="cc"></div></div>
   <div class="card"><b>Conectează un calendar</b><label>Nume (ex. Serviciu)</label><input id="cn1"><label>Linkul ICS al calendarului</label><input id="cu" type="url" autocapitalize="none"><label>Ce văd colegii din el</label><select id="cv1"><option value="ocupat">doar „ocupat"</option><option value="detalii">ocupat + titlul evenimentului</option><option value="ascuns">nimic (nu îl arăta)</option></select><p class="err" id="ce"></p><button style="width:100%" id="cb1">Conectează</button>
   <details style="margin-top:12px"><summary>Cum obțin linkul?</summary><p class="state"><b>Google Calendar</b> (pe calculator): Setări, alege calendarul, „Integrează calendarul", copiază „Adresa secretă în format iCal".<br><b>Outlook / Microsoft 365</b>: Setări, Calendar, Calendare partajate, „Publică un calendar", alege calendarul și copiază linkul ICS (poate fi dezactivat de administratorul firmei).<br><b>iPhone / iCloud</b>: în Calendar, la calendarul dorit alegi „Calendar public" și copiezi linkul.<br>Meniurile mai pot diferi puțin. Oricine are linkul poate vedea calendarul, deci nu îl da mai departe.</p></details></div>`;
-  const H0=7,H1=20,pc=m=>Math.max(0,Math.min(100,(m/60-H0)/(H1-H0)*100));
-  const grila=d=>{const ore=[];for(let h=H0;h<H1;h++)ore.push(`<span>${h}</span>`);
+  let tot=false,ascuns=0;
+  const lim=()=>tot?[7,20]:[8,16.5], pc=m=>{const [a,b]=lim();return Math.max(0,Math.min(100,(m/60-a)/(b-a)*100))};
+  const grila=d=>{const [H0,H1]=lim(),ore=[];for(let h=Math.ceil(H0);h<=Math.floor(H1);h++)ore.push(`<span style="left:${pc(h*60)}%">${h}</span>`);
+    ascuns=0;d.membri.forEach(m=>m.blocuri.forEach(b=>{if(b.pana/60<=H0||b.de/60>=H1)ascuns++}));
     const nume=m=>esc(m.nume)+' '+esc(m.prenume)+(m.stare==='fara_calendar'?'<br><small class="state">fără calendar</small>':m.stare==='nepartajat'?'<br><small class="state">nepartajat</small>':'');
     const bara=b=>{const l=pc(b.de),w=pc(b.pana)-l;return w<=0?'':`<div class="gr-b ${b.tip==='absent'?'abs':''}" style="left:${l}%;width:${Math.max(w,.8)}%" title="${esc(hm(b.de)+'–'+hm(b.pana)+(b.titlu?' '+b.titlu:''))}">${esc(b.titlu||'')}</div>`};
-    return `<div class="gr"><div class="gr-r"><div class="gr-n"></div><div class="gr-t gr-h">${ore.join('')}</div></div>`+d.membri.map(m=>`<div class="gr-r"><div class="gr-n">${nume(m)}</div><div class="gr-t">${m.blocuri.map(bara).join('')}</div></div>`).join('')+`</div>`};
+    return `<div class="gr"><div class="gr-r"><div class="gr-n"></div><div class="gr-t gr-h" style="--n:${H1-H0}">${ore.join('')}</div></div>`+d.membri.map(m=>`<div class="gr-r"><div class="gr-n">${nume(m)}</div><div class="gr-t" style="--n:${H1-H0}">${m.blocuri.map(bara).join('')}</div></div>`).join('')+`</div>`};
   const ag=async()=>{const r=await api('/agenda?data='+$('#agD').value);
     $('#agL').innerHTML=r.length?r.map(e=>{const s=e.sedinta;
       const info=s?`Ședință · ${s.eu_org?'organizată de tine':'organizator: '+esc(s.organizator)}<br>Participă: ${s.participanti.map(esc).join(', ')}`:(e.intern?'adăugat în aplicație':'din '+esc(e.sursa||'calendar'));
@@ -252,7 +254,8 @@ async function calView(){
   const incarca=async()=>{
     if(!gs.length){$('#gv').innerHTML='';$('#gi').textContent='Nu faci parte din niciun grup încă. Administratorul le creează din Admin.';return}
     const d=await api(`/program?grup=${$('#gr').value}&data=${$('#zd').value}`);
-    $('#gv').innerHTML=grila(d);$('#gi').innerHTML='<span style="color:var(--acc)">■</span> ocupat &nbsp; <span style="color:var(--stop)">■</span> absent (concediu / învoire) &nbsp; gol = liber'};
+    $('#gv').innerHTML=grila(d);$('#gi').innerHTML='<span style="color:var(--acc)">■</span> ocupat &nbsp; <span style="color:var(--stop)">■</span> absent (concediu / învoire) &nbsp; gol = liber'+(ascuns&&!tot?`<br>Mai sunt ${ascuns} programări în afara orelor 8:00–16:30.`:'');$('#gt').textContent=tot?'Arată doar 8:00–16:30':'Arată toată ziua (7:00–20:00)'};
+  $('#gt').onclick=()=>{tot=!tot;incarca()};$('#gt').textContent='Arată toată ziua (7:00–20:00)';
   const zile=n=>{const d=new Date($('#zd').value+'T12:00:00');d.setDate(d.getDate()+n);$('#zd').value=zi(d);incarca()};
   $('#zp').onclick=()=>zile(-1);$('#zn').onclick=()=>zile(1);$('#zd').onchange=incarca;$('#gr').onchange=()=>{incarca();docs()};
   $('#fl').onclick=async()=>{try{const r=await api(`/ore-libere?grup=${$('#gr').value}&data=${$('#zd').value}&zile=5&minute=${$('#dm').value}`);
