@@ -77,7 +77,7 @@ def init():
             q(f"ALTER TABLE concedii ADD COLUMN {col} TEXT", write=True)
         except sqlite3.OperationalError:
             pass
-    for col, tip in (("functie", "TEXT DEFAULT ''"), ("ore_zi", "REAL DEFAULT 8"), ("co_an", "REAL"), ("data_ang", "TEXT")):
+    for col, tip in (("functie", "TEXT DEFAULT ''"), ("ore_zi", "REAL DEFAULT 8"), ("co_an", "REAL"), ("data_ang", "TEXT"), ("co_ajust", "REAL DEFAULT 0"), ("co_ajust_an", "INTEGER")):
         try:
             q(f"ALTER TABLE utilizatori ADD COLUMN {col} {tip}", write=True)
         except sqlite3.OperationalError:
@@ -616,11 +616,40 @@ def zile_lucratoare(a, b, an=None):
     return n
 
 
+def _min(h):
+    return int(h[:2]) * 60 + int(h[3:5])
+
+
+def alte(uid, an):
+    """Zile/ore aprobate in anul curent, separat pe tipuri (fara concediul de odihna)."""
+    res = {t: {"zile": 0, "ore": 0, "asteptare": 0} for t in ("zi_libera", "medical", "invoire", "altele")}
+    rows = q("""SELECT tip,de_la,pana_la,ora_de_la,ora_pana_la,status FROM concedii
+                WHERE user_id=? AND tip!='concediu' AND status IN ('aprobat','in asteptare') AND de_la<=? AND pana_la>=?""",
+             (uid, f"{an}-12-31", f"{an}-01-01"))
+    for c in rows:
+        t = res.get(c["tip"])
+        if t is None:
+            continue
+        if c["status"] != "aprobat":
+            t["asteptare"] += 1
+            continue
+        if c["ora_de_la"] and c["ora_pana_la"]:
+            t["ore"] = round(t["ore"] + (_min(c["ora_pana_la"]) - _min(c["ora_de_la"])) / 60, 2)
+        elif c["tip"] == "medical":  # medicalul se numara in zile calendaristice
+            a = max(date.fromisoformat(c["de_la"]), date(an, 1, 1))
+            b = min(date.fromisoformat(c["pana_la"]), date(an, 12, 31))
+            t["zile"] += (b - a).days + 1
+        else:
+            t["zile"] += zile_lucratoare(c["de_la"], c["pana_la"], an)
+    return res
+
+
 def sold(uid):
     """Zile CO dinamice: in fiecare luna se acumuleaza anual/12 (21 zile/an = 1,75 pe luna)."""
     azi = datetime.now(TZ).date()
     an = azi.year
-    u = q("SELECT co_an, data_ang FROM utilizatori WHERE id=?", (uid,), one=True)
+    u = q("SELECT co_an, data_ang, co_ajust, co_ajust_an FROM utilizatori WHERE id=?", (uid,), one=True)
+    ajust = (u["co_ajust"] or 0) if u["co_ajust_an"] == an else 0
     al = {r["an"]: r["zile"] for r in q("SELECT an,zile FROM zile_co WHERE user_id=?", (uid,))}
     anual = u["co_an"] if u["co_an"] is not None else al.get(an, 21)
     reportate = al.get(an - 1, 0)
@@ -638,7 +667,7 @@ def sold(uid):
         except ValueError:
             pass
     luni = max(0, luni)
-    acumulate = round(anual / 12 * luni, 2)
+    acumulate = round(anual / 12 * luni + ajust, 2)
     fol_prev, fol_cur = folosit("aprobat", an - 1), folosit("aprobat", an)
     r_prev = reportate - fol_prev
     din_prev = min(max(r_prev, 0), fol_cur)  # zilele din anul curent se scad intai din cele reportate
@@ -646,9 +675,10 @@ def sold(uid):
     return {"an": an,
             "prev": {"an": an - 1, "alocat": reportate, "ramase": r_prev - din_prev},
             "cur": {"an": an, "anual": anual, "luni": luni, "acumulate": acumulate, "folosite": din_cur,
-                    "ramase_acum": round(acumulate - din_cur, 2), "ramase_an": round(anual - din_cur, 2)},
+                    "ramase_acum": round(acumulate - din_cur, 2), "ramase_an": round(anual + ajust - din_cur, 2), "ajustare": ajust},
             "setari": {"co_an": anual, "data_ang": da or "", "reportate": reportate},
-            "in_asteptare": folosit("in asteptare", None)}
+            "in_asteptare": folosit("in asteptare", None),
+            "alte": alte(uid, an)}
 
 
 @app.get("/api/zile-co")
@@ -665,6 +695,7 @@ class SetariCO(BaseModel):
     co_an: float = 21
     data_ang: str = ""
     reportate: float = 0
+    disponibil: float | None = None  # corectie directa: "zile CO disponibile acum"
 
 
 @app.put("/api/zile-co/setari")
@@ -683,6 +714,13 @@ def setari_co(b: SetariCO, a=Depends(hr)):
     an = datetime.now(TZ).year - 1
     q("""INSERT INTO zile_co(user_id,an,zile) VALUES(?,?,?)
          ON CONFLICT(user_id,an) DO UPDATE SET zile=excluded.zile""", (b.user_id, an, b.reportate), write=True)
+    if b.disponibil is not None:
+        if not -60 <= b.disponibil <= 120:
+            raise HTTPException(422, "Numarul de zile nu e valid.")
+        s = sold(b.user_id)
+        acum = s["cur"]["ramase_acum"] + max(s["prev"]["ramase"], 0)
+        nou = s["cur"]["ajustare"] + (b.disponibil - acum)
+        q("UPDATE utilizatori SET co_ajust=?, co_ajust_an=? WHERE id=?", (round(nou, 2), an + 1, b.user_id), write=True)
     return sold(b.user_id)
 
 
