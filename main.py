@@ -114,7 +114,7 @@ def init():
          vizibil TEXT DEFAULT 'ocupat', ultima TEXT, eroare TEXT, nr INTEGER DEFAULT 0)""", write=True)
     q("CREATE TABLE IF NOT EXISTS evenimente(cal_id INTEGER, user_id INTEGER, inceput TEXT, sfarsit TEXT, titlu TEXT, privat INTEGER)", write=True)
     q("CREATE INDEX IF NOT EXISTS ev_user ON evenimente(user_id, inceput)", write=True)
-    for tabel, col in (("evenimente", "serie TEXT"), ("evenimente", "sedinta TEXT"), ("evenimente", "organizator INTEGER"),
+    for tabel, col in (("evenimente", "serie TEXT"), ("evenimente", "sedinta TEXT"), ("evenimente", "organizator INTEGER"), ("evenimente", "grup_id INTEGER"),
                        ("utilizatori", "viz_intern TEXT DEFAULT 'ocupat'"), ("utilizatori", "hr INTEGER DEFAULT 0")):
         try:
             q(f"ALTER TABLE {tabel} ADD COLUMN {col}", write=True)
@@ -1451,6 +1451,7 @@ class Programare(BaseModel):
     repeta: str = ""  # "", "zilnic" (zile lucratoare), "saptamanal"
     repeta_pana: str = ""
     participanti: list[int] = []  # sedinta: colegii invitati (in afara de organizator)
+    grup: int = 0  # departamentul (grupul) la care se refera programarea, optional
 
 
 class VizIntern(BaseModel):
@@ -1512,6 +1513,12 @@ def programare_noua(b: Programare, u=Depends(me)):
         if len(zile) > 120:
             raise HTTPException(422, "Prea multe repetari. Alege un interval mai scurt.")
     serie = secrets.token_hex(6) if len(zile) > 1 else None
+    grup = None
+    if b.grup:
+        g = q("SELECT id FROM grupuri WHERE id=? AND firma_id=?", (b.grup, u["firma_id"]), one=True)
+        if not g or not (u["admin"] or q("SELECT 1 FROM membri_grup WHERE grup_id=? AND user_id=?", (b.grup, u["id"]), one=True)):
+            raise HTTPException(404, "Departamentul nu exista.")
+        grup = g["id"]
     invitati = []
     if b.participanti:
         permisi = {x["id"]: x for x in invitabili(u)}
@@ -1527,13 +1534,13 @@ def programare_noua(b: Programare, u=Depends(me)):
         inc = datetime.fromisoformat(f"{d.isoformat()}T{de}:00").replace(tzinfo=TZ)
         fin = datetime.fromisoformat(f"{d.isoformat()}T{pana}:00").replace(tzinfo=TZ)
         if not invitati:
-            q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie) VALUES(0,?,?,?,?,?,?)",
-              (u["id"], iso(inc), iso(fin), titlu, 1 if b.privat else 0, serie), write=True)
+            q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie,grup_id) VALUES(0,?,?,?,?,?,?,?)",
+              (u["id"], iso(inc), iso(fin), titlu, 1 if b.privat else 0, serie, grup), write=True)
             continue
         sed = secrets.token_hex(6)  # aceeasi sedinta, in agenda fiecarui participant
         for uid in [u["id"]] + [p["id"] for p in invitati]:
-            q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie,sedinta,organizator) VALUES(0,?,?,?,?,0,?,?,?)",
-              (uid, iso(inc), iso(fin), titlu, serie, sed, u["id"]), write=True)
+            q("INSERT INTO evenimente(cal_id,user_id,inceput,sfarsit,titlu,privat,serie,sedinta,organizator,grup_id) VALUES(0,?,?,?,?,0,?,?,?,?)",
+              (uid, iso(inc), iso(fin), titlu, serie, sed, u["id"], grup), write=True)
     if invitati:
         cand = f"{zile[0].strftime('%d.%m')} {de}" + (f" (si inca {len(zile) - 1} repetari)" if len(zile) > 1 else "")
         for p in invitati:
@@ -1570,8 +1577,8 @@ def agenda(data: str, u=Depends(me)):
     inc = datetime(d.year, d.month, d.day, tzinfo=TZ)
     sf = inc + timedelta(days=1)
     rez = []
-    for r in q("""SELECT e.rowid AS id, e.*, c.nume AS sursa FROM evenimente e LEFT JOIN calendare c ON c.id=e.cal_id
-                  WHERE e.user_id=? AND e.inceput<? AND e.sfarsit>? ORDER BY e.inceput""", (u["id"], iso(sf), iso(inc))):
+    for r in q("""SELECT e.rowid AS id, e.*, c.nume AS sursa, g.nume AS grup FROM evenimente e LEFT JOIN calendare c ON c.id=e.cal_id
+                  LEFT JOIN grupuri g ON g.id=e.grup_id WHERE e.user_id=? AND e.inceput<? AND e.sfarsit>? ORDER BY e.inceput""", (u["id"], iso(sf), iso(inc))):
         a = datetime.fromisoformat(r["inceput"]).replace(tzinfo=timezone.utc).astimezone(TZ)
         b = datetime.fromisoformat(r["sfarsit"]).replace(tzinfo=timezone.utc).astimezone(TZ)
         sed = None
@@ -1583,7 +1590,7 @@ def agenda(data: str, u=Depends(me)):
                    "organizator": f"{org['nume']} {org['prenume']}".strip() if org else ""}
         rez.append({"id": r["id"], "titlu": r["titlu"], "de": a.strftime("%H:%M") if a >= inc else "00:00",
                     "pana": b.strftime("%H:%M") if b <= sf else "24:00", "privat": r["privat"],
-                    "intern": r["cal_id"] == 0, "serie": bool(r["serie"]), "sursa": r["sursa"] or "", "sedinta": sed})
+                    "intern": r["cal_id"] == 0, "serie": bool(r["serie"]), "sursa": r["sursa"] or "", "sedinta": sed, "grup": r["grup"] or ""})
     return rez
 
 
