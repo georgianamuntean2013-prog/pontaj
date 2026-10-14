@@ -95,6 +95,7 @@ async function iesire(){
   if(!confirm('Te deconectezi de pe acest dispozitiv?'))return;
   let ep='';try{const r=await navigator.serviceWorker.getRegistration();const sb=r&&await r.pushManager.getSubscription();ep=sb?sb.endpoint:''}catch(_){}
   try{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+S.token},body:JSON.stringify({endpoint:ep})})}catch(_){}
+  try{const r=await navigator.serviceWorker.getRegistration();const sb=r&&await r.pushManager.getSubscription();if(sb)await sb.unsubscribe()}catch(_){}
   S=null;tab='azi';try{localStorage.removeItem('pontaj')}catch(_){}render()}
 
 function render(){
@@ -141,12 +142,20 @@ async function notificari(){
     el.innerHTML='<b>Notificări</b><p class="state">Merg doar când aplicația e pe HTTPS (după ce o punem în cloud). Pe iPhone, adaug-o întâi pe ecranul principal.</p>';return}
   const reg=await navigator.serviceWorker.ready,sub=await reg.pushManager.getSubscription();
   el.innerHTML=`<b>Notificări</b><p class="state">${sub?'Active pe acest dispozitiv. Primești reminder la 07:50 și 08:10 dacă nu ai pontat.':'Primești reminder la 07:50 și 08:10 dacă nu ai pontat venirea.'}</p><p class="err" id="en"></p><button class="${sub?'sec':''}" style="width:100%" id="nb">${sub?'Trimite o notificare de test':'Activează notificările'}</button>`;
-  $('#nb').onclick=async()=>{try{
-    if(sub){await post('/push/test');return}
-    if(await Notification.requestPermission()!=='granted')throw new Error('Notificările sunt blocate în browser.');
+  const nou=async()=>{
+    if(await Notification.requestPermission()!=='granted')throw new Error('Notificările sunt blocate în browser. Permite-le din setările site-ului.');
+    const old=await reg.pushManager.getSubscription();if(old)try{await old.unsubscribe()}catch(_){}
     const k=(await api('/push/cheie')).cheie,key=Uint8Array.from(atob((k+'='.repeat((4-k.length%4)%4)).replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
     const s=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
-    await post('/push/abonare',s.toJSON());notificari();
+    await post('/push/abonare',s.toJSON())};
+  if(sub)post('/push/abonare',sub.toJSON()).catch(()=>{});
+  $('#nb').onclick=async()=>{try{
+    $('#en').textContent='';
+    if(sub){
+      try{await post('/push/abonare',sub.toJSON());await post('/push/test');$('#en').innerHTML='<span class="ok">Notificare trimisă. Ar trebui să o vezi acum.</span>';return}
+      catch(_){await nou();await post('/push/test');$('#en').innerHTML='<span class="ok">Am reactivat notificările pe acest dispozitiv și am trimis un test.</span>';return}
+    }
+    await nou();notificari();
   }catch(x){$('#en').textContent=x.message}};
 }
 
