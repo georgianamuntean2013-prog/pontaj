@@ -816,8 +816,30 @@ def claim(zi, slot):  # un singur proces trimite fiecare reminder, o singura dat
         con.close()
 
 
+def remindere_intalniri(acum=None):
+    """Cu 10 minute inainte de o programare/sedinta din aplicatie, fiecare participant primeste o notificare."""
+    acum = acum or datetime.now(timezone.utc)
+    rows = q("""SELECT e.rowid AS id, e.user_id, e.inceput, e.titlu, e.privat, g.nume AS grup
+                FROM evenimente e LEFT JOIN grupuri g ON g.id=e.grup_id
+                JOIN utilizatori u ON u.id=e.user_id
+                WHERE e.cal_id=0 AND e.inceput>? AND e.inceput<=? AND COALESCE(u.activ,1)=1""",
+             tuple((acum + timedelta(minutes=m)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") for m in (5, 10)))
+    n = 0
+    for r in rows:
+        if not claim(r["inceput"][:10], f"ev:{r['id']}:{r['inceput']}"):
+            continue
+        ora = datetime.fromisoformat(r["inceput"]).replace(tzinfo=timezone.utc).astimezone(TZ).strftime("%H:%M")
+        trimite(r["user_id"], "Peste 10 minute", f"{r['titlu']} la {ora}" + (f" · {r['grup']}" if r["grup"] else ""))
+        n += 1
+    return n
+
+
 def bucla():
     while True:
+        try:
+            remindere_intalniri()
+        except Exception as e:
+            print("Eroare remindere intalniri:", e)
         try:
             acum = datetime.now(TZ)
             zi = acum.strftime("%Y-%m-%d")
