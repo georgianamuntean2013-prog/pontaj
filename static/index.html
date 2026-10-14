@@ -170,7 +170,7 @@ async function aziView(){
     show(await post(p,b));$('#e').textContent=nota?'Pontaj salvat, dar '+nota:'';
   }catch(x){$('#e').textContent=x.message}};
   $('#bv').onclick=cuLoc('/venire');$('#bp').onclick=cuLoc('/plecare');
-  $('#sp').onclick=()=>act('/pauza',{method:'PUT',body:JSON.stringify({minute:+$('#pz').value||0})})();
+  $('#sp').onclick=async()=>{try{show(await api('/pauza',{method:'PUT',body:JSON.stringify({minute:+$('#pz').value||0})}));$('#e').textContent='';$('#sp').textContent='Salvat ✓';setTimeout(()=>{const b=$('#sp');if(b)b.textContent='Salvează'},2000)}catch(x){$('#e').textContent=x.message}};
 }
 
 async function lunaView(){
