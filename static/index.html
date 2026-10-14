@@ -159,6 +159,7 @@ const locatie=()=>new Promise((ok,nu)=>{
 async function aziView(){
   app.innerHTML=`<h1>Salut, ${esc(S.prenume||S.nume)}</h1><div class="card"><div class="clock" id="ck"></div><div class="state" id="st">Se încarcă…</div>
   <p class="err" id="e"></p><div class="big"><button id="bv">Venire</button><button id="bp">Plecare</button></div></div>
+  <div class="card" id="pg"><b>Programări azi</b><div id="pgl"><p class="state">Se încarcă…</p></div></div>
   <div class="card"><label>Pauză de masă (minute)</label><div class="row"><input id="pz" type="number" min="0" max="240" step="5" style="margin:0"><button class="sec" id="sp">Salvează</button></div></div><div class="card" id="co"></div><div class="card" id="nt"></div>`;
   const now=new Date(), zi=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
   const show=r=>{today=r;$('#pz').value=r?.pauza_min||0;
@@ -168,6 +169,7 @@ async function aziView(){
   try{show((await api('/pontaje?luna='+ym(now))).find(r=>r.data===zi))}catch(x){$('#e').textContent=x.message}
   api('/zile-co').then(s=>$('#co').innerHTML=soldHtml(s)).catch(()=>{});
   api('/eu').then(p=>{if(p.locatie!==S.locatie||(p.hr||0)!==(S.hr||0)||p.admin!==S.admin){const sch=(p.hr||0)!==(S.hr||0)||p.admin!==S.admin;S.locatie=p.locatie;S.hr=p.hr;S.admin=p.admin;localStorage.setItem('pontaj',JSON.stringify(S));if(sch)render()}}).catch(()=>{});
+  api('/agenda?data='+zi).then(r=>{$('#pgl').innerHTML=r.length?r.map(e=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${e.de}–${e.pana}</b> ${esc(e.titlu)}${e.privat?' 🔒':''}<br><small class="state">${e.grup?esc(e.grup):'fără departament'}${e.sedinta&&!e.sedinta.eu_org?' · organizator: '+esc(e.sedinta.organizator):''}</small></div>`).join(''):'<p class="state">Nimic programat pentru azi.</p>'}).catch(()=>{$('#pg').hidden=true});
   notificari();
   const act=(p,b,m)=>async()=>{try{show(await (b?api(p,b):post(p)));$('#e').textContent='';}catch(x){$('#e').textContent=x.message}};
   const cuLoc=p=>async()=>{try{let b=null,nota='';
@@ -204,6 +206,7 @@ async function calView(){
   <div class="row" style="gap:8px"><div style="flex:1"><label>De la</label><input type="time" id="agDe" value="10:00"></div><div style="flex:1"><label>Până la</label><input type="time" id="agPa" value="11:00"></div></div>
   <label style="display:flex;align-items:center;gap:8px;margin:4px 0 12px"><input type="checkbox" id="agPriv" style="width:auto;margin:0">Privat (colegii nu văd titlul)</label>
   <div id="agPw" hidden><label>Participanți (bifează cine vine)</label><div id="agPl" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px"></div><button class="sec" type="button" id="agPt" style="margin:6px 0 12px">Bifează toți / niciunul</button></div>
+  <label>Departament (opțional)</label><select id="agG"><option value="">— niciunul —</option></select>
   <label>Repetare</label><select id="agRep"><option value="">Nu se repetă</option><option value="zilnic">În fiecare zi lucrătoare</option><option value="saptamanal">În fiecare săptămână</option></select>
   <div id="agRw" hidden><label>Se repetă până la</label><input type="date" id="agRp"></div>
   <p class="err" id="agE"></p><button style="width:100%" id="agB">Adaugă programarea</button>
@@ -231,7 +234,7 @@ async function calView(){
     $('#agL').innerHTML=r.length?r.map(e=>{const s=e.sedinta;
       const info=s?`Ședință · ${s.eu_org?'organizată de tine':'organizator: '+esc(s.organizator)}<br>Participă: ${s.participanti.map(esc).join(', ')}`:(e.intern?'adăugat în aplicație':'din '+esc(e.sursa||'calendar'));
       const btn=e.intern?`<span><button class="sec" data-ev="${e.id}" data-sd="${s?(s.eu_org?'org':'part'):''}">${s?(s.eu_org?'Șterge pentru toți':'Nu particip'):'Șterge'}</button>${e.serie?` <button class="sec" data-es="${e.id}" data-sd="${s?(s.eu_org?'org':'part'):''}">${s?(s.eu_org?'Șterge seria':'Nu particip la serie'):'Șterge seria'}</button>`:''}</span>`:'';
-      return `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap"><span><b>${e.de}–${e.pana}</b> ${esc(e.titlu)}${e.privat?' 🔒':''}<br><small class="state">${info}</small></span>${btn}</div>`}).join(''):'<p class="state">Nicio programare în ziua asta.</p>'};
+      return `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap"><span><b>${e.de}–${e.pana}</b> ${esc(e.titlu)}${e.privat?' 🔒':''}<br><small class="state">${e.grup?'Departament: '+esc(e.grup)+' · ':''}${info}</small></span>${btn}</div>`}).join(''):'<p class="state">Nicio programare în ziua asta.</p>'};
   const agZi=n=>{const d=new Date($('#agD').value+'T12:00:00');d.setDate(d.getDate()+n);$('#agD').value=zi(d);ag()};
   $('#agP').onclick=()=>agZi(-1);$('#agN').onclick=()=>agZi(1);$('#agD').onchange=ag;
   $('#agRep').onchange=()=>{$('#agRw').hidden=!$('#agRep').value;if($('#agRep').value&&!$('#agRp').value){const d=new Date($('#agDt').value+'T12:00:00');d.setMonth(d.getMonth()+1);$('#agRp').value=zi(d)}};
@@ -242,7 +245,7 @@ async function calView(){
     else return;
     ag();incarca()}catch(x){alert(x.message)}};
   $('#agB').onclick=async()=>{try{
-    const r=await post('/evenimente',{titlu:$('#agT').value,data:$('#agDt').value,de_la:$('#agDe').value,pana_la:$('#agPa').value,privat:$('#agPriv').checked?1:0,repeta:$('#agRep').value,repeta_pana:$('#agRp').value,participanti:[...document.querySelectorAll('#agPl input:checked')].map(i=>+i.value)});
+    const r=await post('/evenimente',{titlu:$('#agT').value,data:$('#agDt').value,de_la:$('#agDe').value,pana_la:$('#agPa').value,privat:$('#agPriv').checked?1:0,repeta:$('#agRep').value,repeta_pana:$('#agRp').value,participanti:[...document.querySelectorAll('#agPl input:checked')].map(i=>+i.value),grup:+$('#agG').value||0});
     $('#agE').innerHTML='<span class="ok">'+(r.invitati?`Ședință adăugată pentru ${r.invitati+1} persoane`+(r.adaugate>1?` (${r.adaugate} zile)`:'')+'. Invitații au primit notificare.':(r.adaugate>1?r.adaugate+' programări adăugate.':'Programare adăugată.'))+'</span>'+(r.ocupati&&r.ocupati.length?`<br><span class="err">Atenție: ${r.ocupati.map(esc).join(', ')} au altceva în calendar la ora aceea.</span>`:'');$('#agT').value='';document.querySelectorAll('#agPl input').forEach(i=>i.checked=false);
     $('#agD').value=$('#agDt').value;ag();incarca()}catch(x){$('#agE').textContent=x.message}};
   $('#agViz').onchange=async()=>{try{await api('/calendar-intern',{method:'PUT',body:JSON.stringify({vizibil:$('#agViz').value})});incarca()}catch(x){alert(x.message)}};
@@ -294,7 +297,7 @@ async function calView(){
       if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.detail||'Eroare '+r.status)}
       $('#ff').value=$('#fd1').value='';$('#ef1').textContent='';docs()
     }catch(x){$('#ef1').textContent=x.message}};
-  gs=await api('/grupuri');$('#gr').innerHTML=gs.map(g=>`<option value="${g.id}">${esc(g.nume)}</option>`).join('');
+  gs=await api('/grupuri');$('#agG').innerHTML+=gs.map(g=>`<option value="${g.id}">${esc(g.nume)}</option>`).join('');$('#gr').innerHTML=gs.map(g=>`<option value="${g.id}">${esc(g.nume)}</option>`).join('');
   cal();incarca();docs();ag();
 }
 
