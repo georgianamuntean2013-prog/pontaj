@@ -52,8 +52,9 @@ def hp(parola, salt):
 
 def add_user(username, nume, prenume, parola, admin=0, functie="", ore_zi=8.0, firma_id=1, schimba=0, locatie=0):
     salt = secrets.token_hex(8)
-    return q("INSERT INTO utilizatori(username,nume,prenume,salt,hash,admin,functie,ore_zi,firma_id,schimba_parola,locatie) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-             (username, nume, prenume, salt, hp(parola, salt), admin, functie, ore_zi, firma_id, schimba, locatie), write=True)
+    return q("INSERT INTO utilizatori(username,nume,prenume,salt,hash,admin,functie,ore_zi,firma_id,schimba_parola,locatie,creat_la) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+             (username, nume, prenume, salt, hp(parola, salt), admin, functie, ore_zi, firma_id, schimba, locatie,
+              datetime.now(TZ).strftime("%Y-%m-%d")), write=True)
 
 
 def init():
@@ -77,11 +78,14 @@ def init():
             q(f"ALTER TABLE concedii ADD COLUMN {col} TEXT", write=True)
         except sqlite3.OperationalError:
             pass
-    for col, tip in (("functie", "TEXT DEFAULT ''"), ("ore_zi", "REAL DEFAULT 8"), ("co_an", "REAL"), ("data_ang", "TEXT"), ("co_ajust", "REAL DEFAULT 0"), ("co_ajust_an", "INTEGER")):
+    for col, tip in (("functie", "TEXT DEFAULT ''"), ("ore_zi", "REAL DEFAULT 8"), ("co_an", "REAL"), ("data_ang", "TEXT"), ("co_ajust", "REAL DEFAULT 0"), ("co_ajust_an", "INTEGER"), ("creat_la", "TEXT")):
         try:
             q(f"ALTER TABLE utilizatori ADD COLUMN {col} {tip}", write=True)
         except sqlite3.OperationalError:
             pass
+    # cine nu a pontat niciodata: se numara lipsa de azi incolo (cine a pontat: de la primul pontaj)
+    q("""UPDATE utilizatori SET creat_la=? WHERE creat_la IS NULL
+         AND NOT EXISTS (SELECT 1 FROM pontaje WHERE user_id=utilizatori.id)""", (datetime.now(TZ).strftime("%Y-%m-%d"),), write=True)
     q("""CREATE TABLE IF NOT EXISTS firme(id INTEGER PRIMARY KEY, denumire TEXT, cui TEXT DEFAULT '',
          adresa TEXT DEFAULT '', contact TEXT DEFAULT '', activ INTEGER DEFAULT 1)""", write=True)
     for col, tip in (("firma_id", "INTEGER"), ("schimba_parola", "INTEGER DEFAULT 0"), ("superadmin", "INTEGER DEFAULT 0")):
@@ -439,7 +443,9 @@ def randuri_export(luna, firma):
     """Zilele cu pontaj + zilele lucratoare de concediu/absenta aprobata fara pontaj, cu o coloana de observatii."""
     an, ln = map(int, luna.split("-"))
     d0, d1 = date(an, ln, 1), date(an + (ln == 12), ln % 12 + 1, 1) - timedelta(days=1)
-    users = {r["id"]: r for r in q("""SELECT id,nume,prenume,COALESCE(ore_zi,8) AS ore_zi,COALESCE(locatie,0) AS cere_loc
+    users = {r["id"]: r for r in q("""SELECT id,nume,prenume,COALESCE(ore_zi,8) AS ore_zi,COALESCE(locatie,0) AS cere_loc,
+                                       COALESCE(activ,1) AS activ, data_ang, creat_la,
+                                       (SELECT MIN(data) FROM pontaje WHERE user_id=utilizatori.id) AS primul
                                        FROM utilizatori WHERE firma_id=?""", (firma,))}
     obs, cereri = {}, {}
     for c in q("SELECT * FROM concedii WHERE status='aprobat' AND pana_la>=? AND de_la<=?", (d0.isoformat(), d1.isoformat())):
@@ -453,17 +459,42 @@ def randuri_export(luna, firma):
                 obs.setdefault((c["user_id"], d.isoformat()), []).append(text)
             d += timedelta(days=1)
     rez = randuri(luna, None, firma)
-    prezent = {(r["user_id"], r["data"]) for r in rez}
+    prezent, lrow = {(r["user_id"], r["data"]) for r in rez}, {}
     for r in rez:
         r["obs"] = "; ".join(obs.get((r["user_id"], r["data"]), []))
     for (uid, zi), t in obs.items():
         if (uid, zi) in prezent:
             continue
         u = users[uid]
-        rez.append({"user_id": uid, "data": zi, "nume": u["nume"], "prenume": u["prenume"], "ora_venire": None,
-                    "ora_plecare": None, "pauza_min": None, "total_ore": None, "diferenta": None,
-                    "norma": norma_zi(zi, cereri.get(uid, []), u["ore_zi"]), "cere_loc": 0, "obs": "; ".join(t),
-                    "venire_lat": None, "venire_lon": None, "plecare_lat": None, "plecare_lon": None})
+        lrow[(uid, zi)] = {"user_id": uid, "data": zi, "nume": u["nume"], "prenume": u["prenume"], "ora_venire": None,
+                           "ora_plecare": None, "pauza_min": None, "total_ore": None, "diferenta": None,
+                           "norma": norma_zi(zi, cereri.get(uid, []), u["ore_zi"]), "cere_loc": 0, "obs": "; ".join(t),
+                           "venire_lat": None, "venire_lon": None, "plecare_lat": None, "plecare_lon": None}
+        rez.append(lrow[(uid, zi)])
+    # zilele lucratoare trecute in care un coleg activ nu a pontat si nici nu are concediu aprobat pe toata ziua
+    azi = datetime.now(TZ).date()
+    for uid, u in users.items():
+        if not u["activ"]:
+            continue
+        start = max([x for x in (u["data_ang"] or "", u["creat_la"] or u["primul"] or "") if x] or [""])
+        if not start:
+            continue
+        d, sf = max(d0, date.fromisoformat(start)), min(d1, azi - timedelta(days=1))
+        while d <= sf:
+            zi = d.isoformat()
+            if (d.weekday() < 5 and d not in sarbatori(d.year) and (uid, zi) not in prezent
+                    and norma_zi(zi, cereri.get(uid, []), u["ore_zi"]) > 0
+                    and not any(c["ora_de_la"] is None and c["de_la"] <= zi <= c["pana_la"] for c in cereri.get(uid, []))):
+                nm = norma_zi(zi, cereri.get(uid, []), u["ore_zi"])
+                if (uid, zi) in lrow:  # are doar o invoire pe ore: acelasi rand, cu mentiunea ca nu a pontat
+                    lrow[(uid, zi)].update(diferenta=-nm, obs="Nu a pontat; " + lrow[(uid, zi)]["obs"])
+                    d += timedelta(days=1)
+                    continue
+                rez.append({"user_id": uid, "data": zi, "nume": u["nume"], "prenume": u["prenume"], "ora_venire": None,
+                            "ora_plecare": None, "pauza_min": None, "total_ore": None, "diferenta": -nm, "norma": nm,
+                            "cere_loc": 0, "venire_lat": None, "venire_lon": None, "plecare_lat": None, "plecare_lon": None,
+                            "obs": "Nu a pontat" + ("; " + "; ".join(obs[(uid, zi)]) if (uid, zi) in obs else "")})
+            d += timedelta(days=1)
     return sorted(rez, key=lambda r: (r["nume"] or "", r["prenume"] or "", r["data"]))
 
 
