@@ -431,20 +431,55 @@ def _loc_export(lat, lon, ora, cere):
     return "nu a trimis locația" if cere and ora else ""
 
 
+ETICHETE = {"concediu": "Concediu de odihnă", "medical": "Concediu medical", "invoire": "Învoire",
+            "zi_libera": "Zi liberă plătită", "altele": "Altele"}
+
+
+def randuri_export(luna, firma):
+    """Zilele cu pontaj + zilele lucratoare de concediu/absenta aprobata fara pontaj, cu o coloana de observatii."""
+    an, ln = map(int, luna.split("-"))
+    d0, d1 = date(an, ln, 1), date(an + (ln == 12), ln % 12 + 1, 1) - timedelta(days=1)
+    users = {r["id"]: r for r in q("""SELECT id,nume,prenume,COALESCE(ore_zi,8) AS ore_zi,COALESCE(locatie,0) AS cere_loc
+                                       FROM utilizatori WHERE firma_id=?""", (firma,))}
+    obs, cereri = {}, {}
+    for c in q("SELECT * FROM concedii WHERE status='aprobat' AND pana_la>=? AND de_la<=?", (d0.isoformat(), d1.isoformat())):
+        if c["user_id"] not in users:
+            continue
+        cereri.setdefault(c["user_id"], []).append(c)
+        text = ETICHETE.get(c["tip"], c["tip"]) + (f" {c['ora_de_la']}–{c['ora_pana_la']}" if c["ora_de_la"] and c["ora_pana_la"] else "")
+        d, sf = max(date.fromisoformat(c["de_la"]), d0), min(date.fromisoformat(c["pana_la"]), d1)
+        while d <= sf:
+            if d.weekday() < 5 and d not in sarbatori(d.year):
+                obs.setdefault((c["user_id"], d.isoformat()), []).append(text)
+            d += timedelta(days=1)
+    rez = randuri(luna, None, firma)
+    prezent = {(r["user_id"], r["data"]) for r in rez}
+    for r in rez:
+        r["obs"] = "; ".join(obs.get((r["user_id"], r["data"]), []))
+    for (uid, zi), t in obs.items():
+        if (uid, zi) in prezent:
+            continue
+        u = users[uid]
+        rez.append({"user_id": uid, "data": zi, "nume": u["nume"], "prenume": u["prenume"], "ora_venire": None,
+                    "ora_plecare": None, "pauza_min": None, "total_ore": None, "diferenta": None,
+                    "norma": norma_zi(zi, cereri.get(uid, []), u["ore_zi"]), "cere_loc": 0, "obs": "; ".join(t),
+                    "venire_lat": None, "venire_lon": None, "plecare_lat": None, "plecare_lon": None})
+    return sorted(rez, key=lambda r: (r["nume"] or "", r["prenume"] or "", r["data"]))
+
+
 def date_export(luna, firma):
-    rez = sorted(randuri(luna, None, firma), key=lambda r: (r["nume"] or "", r["prenume"] or "", r["data"]))
     return [[r["nume"], r["prenume"], r["data"], ZILE[date.fromisoformat(r["data"]).weekday()], r["ora_venire"],
-             r["ora_plecare"], r["pauza_min"], r["total_ore"], r["norma"], r["diferenta"],
+             r["ora_plecare"], r["pauza_min"], r["total_ore"], r["norma"], r["diferenta"], r["obs"],
              _loc_export(r["venire_lat"], r["venire_lon"], r["ora_venire"], r["cere_loc"]),
-             _loc_export(r["plecare_lat"], r["plecare_lon"], r["ora_plecare"], r["cere_loc"])] for r in rez]
+             _loc_export(r["plecare_lat"], r["plecare_lon"], r["ora_plecare"], r["cere_loc"])] for r in randuri_export(luna, firma)]
 
 
 @app.get("/api/export-xlsx")
 def export_xlsx(luna: str, a=Depends(hr)):
     if not re.fullmatch(r"\d{4}-\d{2}", luna):
         raise HTTPException(422, "Luna nu e valida.")
-    antete = ["Nume", "Prenume", "Data", "Ziua", "Ora venire", "Ora plecare", "Pauză masă (min)", "Total ore lucrate", "Normă (ore)", "Diferență (ore)", "Locație venire", "Locație plecare"]
-    rand_, latimi, tipuri = date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15, 22, 22], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n", "m", "m"]
+    antete = ["Nume", "Prenume", "Data", "Ziua", "Ora venire", "Ora plecare", "Pauză masă (min)", "Total ore lucrate", "Normă (ore)", "Diferență (ore)", "Observații", "Locație venire", "Locație plecare"]
+    rand_, latimi, tipuri = date_export(luna, a["firma_id"]), [16, 16, 12, 12, 12, 12, 16, 18, 13, 15, 28, 22, 22], ["t", "t", "d", "t", "h", "h", "i", "n", "n", "n", "t", "m", "m"]
     if not a["admin"]:  # HR primeste exportul fara coloanele de locatie
         antete, rand_, latimi, tipuri = antete[:-2], [r[:-2] for r in rand_], latimi[:-2], tipuri[:-2]
     continut = xlsx(antete, rand_, latimi, tipuri)
@@ -456,10 +491,10 @@ def export_xlsx(luna: str, a=Depends(hr)):
 def export(luna: str, a=Depends(hr)):
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")  # Excel in limba romana asteapta ; ca separator
-    w.writerow(["Data", "Ora Venire", "Ora Plecare", "Pauza Masa", "Total Ore", "Nume", "Prenume", "Norma", "Diferenta"])
-    for r in randuri(luna, None, a["firma_id"]):
+    w.writerow(["Data", "Ora Venire", "Ora Plecare", "Pauza Masa", "Total Ore", "Nume", "Prenume", "Norma", "Diferenta", "Observatii"])
+    for r in randuri_export(luna, a["firma_id"]):
         w.writerow([r["data"], r["ora_venire"], r["ora_plecare"], r["pauza_min"], r["total_ore"], r["nume"],
-                    r["prenume"], r["norma"], r["diferenta"]])
+                    r["prenume"], r["norma"], r["diferenta"], r["obs"]])
     return Response(("\ufeff" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=pontaj-{luna}.csv"})
 
